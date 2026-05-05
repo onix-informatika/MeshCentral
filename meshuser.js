@@ -552,7 +552,20 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
 
             // Build server information object
             const allFeatures = parent.getDomainUserFeatures(domain, user, req);
-            var serverinfo = { domain: domain.id, name: domain.dns ? domain.dns : parent.certificates.CommonName, mpsname: parent.certificates.AmtMpsName, mpsport: mpsport, mpspass: args.mpspass, port: httpport, emailcheck: ((domain.mailserver != null) && (domain.auth != 'sspi') && (domain.auth != 'ldap') && (args.lanonly != true) && (parent.certificates.CommonName != null) && (parent.certificates.CommonName.indexOf('.') != -1) && (user._id.split('/')[2].startsWith('~') == false)), domainauth: (domain.auth == 'sspi'), serverTime: Date.now(), features: allFeatures.features, features2: allFeatures.features2 };
+            var serverinfo = { 
+                domain: domain.id,
+                name: domain.dns ? domain.dns : parent.certificates.CommonName,
+                mpsname: parent.certificates.AmtMpsName,
+                mpsport: mpsport,
+                mpspass: args.mpspass,
+                port: httpport,
+                emailcheck: ((domain.mailserver != null) && (domain.auth != 'sspi') && (domain.auth != 'ldap') && (args.lanonly != true) && (parent.certificates.CommonName != null) && (parent.certificates.CommonName.indexOf('.') != -1) && (user._id.split('/')[2].startsWith('~') == false)),
+                domainauth: (domain.auth == 'sspi'),
+                serverTime: Date.now(),
+                features: allFeatures.features,
+                features2: allFeatures.features2,
+                features3: allFeatures.features3
+            };
             serverinfo.languages = parent.renderLanguages;
             serverinfo.tlshash = Buffer.from(parent.webCertificateFullHashs[domain.id], 'binary').toString('hex').toUpperCase(); // SHA384 of server HTTPS certificate
             serverinfo.agentCertHash = parent.agentCertificateHashBase64;
@@ -715,6 +728,12 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                         }
                         if (command.meshid == null) { err = 'Invalid group id'; }
                     }
+
+                    // Check if command.id is set with a domain id, if not, add the domain id to it.
+                    if (typeof command.id == 'string' && command.id !== '') {
+                        if (common.validateString(command.id, 1, 1024) == false) { err = 'Invalid device identifier'; }
+                        else if (command.id.indexOf('/') == -1) { command.id = 'node/' + domain.id + '/' + command.id; }
+                    }  
 
                     if (err == null) {
                         try {
@@ -981,16 +1000,16 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                     if (command.type == 'tunnel') {
                         if ((typeof command.value != 'string') || (typeof command.nodeid != 'string')) break;
                         var url = null;
-                        try { url = require('url').parse(command.value, true); } catch (ex) { }
+                        try { url = new URL(command.value, 'http://localhost'); } catch (ex) { }
                         if (url == null) break; // Bad URL
-                        if (url.query && url.query.nodeid && (url.query.nodeid != command.nodeid)) break; // Bad NodeID in URL query string
+                        if (url.searchParams.get('nodeid') && (url.searchParams.get('nodeid') != command.nodeid)) break; // Bad NodeID in URL query string
 
                         // Check rights
-                        if (url.query.p == '1') { requiredNonRights = MESHRIGHT_NOTERMINAL; }
-                        else if ((url.query.p == '4') || (url.query.p == '5')) { requiredNonRights = MESHRIGHT_NOFILES; }
+                        if (url.searchParams.get('p') == '1') { requiredNonRights = MESHRIGHT_NOTERMINAL; }
+                        else if ((url.searchParams.get('p') == '4') || (url.searchParams.get('p') == '5')) { requiredNonRights = MESHRIGHT_NOFILES; }
 
                         // If we are using the desktop multiplexor, remove the VIEWONLY limitation. The multiplexor will take care of enforcing that limitation when needed.
-                        if (((parent.parent.config.settings.desktopmultiplex === true) || (domain.desktopmultiplex === true)) && (url.query.p == '2')) { routingOptions = { removeViewOnlyLimitation: true }; }
+                        if (((parent.parent.config.settings.desktopmultiplex === true) || (domain.desktopmultiplex === true)) && (url.searchParams.get('p') == '2')) { routingOptions = { removeViewOnlyLimitation: true }; }
 
                         // Add server TLS cert hash
                         var tlsCertHash = null;
@@ -1011,7 +1030,7 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                             if (domain.consentmessages.autoacceptifnouser === true) { command.soptions.consentAutoAcceptIfNoUser = true; }
                             if (domain.consentmessages.autoacceptifdesktopnouser === true) { command.soptions.consentAutoAcceptIfDesktopNoUser = true; }
                             if (domain.consentmessages.autoacceptifterminalnouser === true) { command.soptions.consentAutoAcceptIfTerminalNoUser = true; }
-                            if (domain.consentmessages.autoacceptiffilenouser === true) { command.soptions.consentAautoAcceptIfFileNoUser = true; }
+                            if (domain.consentmessages.autoacceptiffilenouser === true) { command.soptions.consentAutoAcceptIfFileNoUser = true; }
                             if (domain.consentmessages.autoacceptiflocked === true) { command.soptions.consentAutoAcceptIfLocked = true; }
                             if (domain.consentmessages.autoacceptifdesktoplocked === true) { command.soptions.consentAutoAcceptIfDesktopLocked = true; }
                             if (domain.consentmessages.autoacceptifterminallocked === true) { command.soptions.consentAutoAcceptIfTerminalLocked = true; }
@@ -1024,6 +1043,7 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                             if (typeof domain.notificationmessages.terminal == 'string') { command.soptions.notifyMsgTerminal = domain.notificationmessages.terminal; }
                             if (typeof domain.notificationmessages.files == 'string') { command.soptions.notifyMsgFiles = domain.notificationmessages.files; }
                         }
+                        if (typeof domain.terminaluservariable == 'string') { command.soptions.terminalUserVariable = domain.terminaluservariable; }
 
                         // Add userid
                         command.userid = user._id;
@@ -4728,6 +4748,96 @@ module.exports.CreateMeshUser = function (parent, db, ws, req, args, domain, use
                 parent.parent.pluginHandler.removePlugin(command.id, function(){
                     parent.db.getPlugins(function(err, docs) {
                         try { ws.send(JSON.stringify({ action: 'updatePluginList', list: docs, result: err })); } catch (ex) { } 
+                    });
+                });
+                break;
+            }
+            case 'reloadplugin': {
+                if ((user.siteadmin != SITERIGHT_ADMIN) || (parent.parent.pluginHandler == null)) break; // Must be full admin with plugins enabled
+                if (command.plugin == "ALL") {
+                    // Reload all plugins
+                    parent.parent.pluginHandler.reloadAllPlugins(function(result) {
+                        try { ws.send(JSON.stringify({ action: 'pluginReloaded', result: result })); } catch (ex) { }
+                    });
+                } else {
+                    // Reload specific plugin
+                    parent.parent.pluginHandler.reloadPlugin(command.plugin, function(result) {
+                        try { ws.send(JSON.stringify({ action: 'pluginReloaded', result: result })); } catch (ex) { }
+                    });
+                }
+                break;
+            }
+            case 'getpluginpermissions': {
+                if ((user.siteadmin != SITERIGHT_ADMIN) || (parent.parent.pluginHandler == null)) break; // Must be full admin
+                var perms = parent.parent.pluginHandler.getPluginPermissions(command.plugin);
+                try { ws.send(JSON.stringify({ action: 'pluginPermissions', plugin: command.plugin, permissions: perms })); } catch (ex) { }
+                break;
+            }
+            case 'setpluginpermissions': {
+                if ((user.siteadmin != SITERIGHT_ADMIN) || (parent.parent.pluginHandler == null)) break; // Must be full admin
+                parent.parent.pluginHandler.setPluginPermissions(command.plugin, command.data, function(err) {
+                    try { ws.send(JSON.stringify({ action: 'pluginPermissionsSet', plugin: command.plugin, success: !err, error: err })); } catch (ex) { }
+                });
+                break;
+            }
+            case 'getpluginpermissionlist': {
+                // Return list of users, user groups, meshes, nodes for permission assignment UI
+                if ((user.siteadmin != SITERIGHT_ADMIN) || (parent.parent.pluginHandler == null)) break;
+                
+                var result = { users: [], userGroups: [], meshes: [], nodes: [] };
+                
+                // Get all users
+                parent.db.GetAllType('user', function(err, docs) {
+                    if (docs) {
+                        docs.forEach(function(u) {
+                            if (u.name && u._id) {
+                                result.users.push({ _id: u._id, name: u.name, email: u.email });
+                            }
+                        });
+                    }
+                    
+                    // Get all user groups
+                    parent.db.GetAllType('ugrp', function(err, ugrps) {
+                        if (ugrps) {
+                            ugrps.forEach(function(ug) {
+                                if (ug.name && ug._id) {
+                                    result.userGroups.push({ _id: ug._id, name: ug.name });
+                                }
+                            });
+                        }
+                        
+                        // Get all meshes (device groups)
+                        parent.db.GetAllType('mesh', function(err, meshes) {
+                            if (meshes) {
+                                meshes.forEach(function(m) {
+                                    if (m.name && m._id && !m.deleted) {
+                                        result.meshes.push({ _id: m._id, name: m.name });
+                                    }
+                                });
+                            }
+                            
+                            // Get all nodes (devices)
+                            parent.db.GetAllType('node', function(err, nodes) {
+                                if (nodes) {
+                                    // Create a map of meshid to meshname for grouping
+                                    var meshMap = {};
+                                    if (meshes) {
+                                        meshes.forEach(function(m) {
+                                            meshMap[m._id] = m.name;
+                                        });
+                                    }
+                                    
+                                    nodes.forEach(function(n) {
+                                        if (n.name && n._id && !n.deleted) {
+                                            var meshname = meshMap[n.meshid] || 'Ungrouped';
+                                            result.nodes.push({ _id: n._id, name: n.name, meshid: n.meshid, meshname: meshname });
+                                        }
+                                    });
+                                }
+                                
+                                try { ws.send(JSON.stringify({ action: 'pluginPermissionList', list: result })); } catch (ex) { }
+                            });
+                        });
                     });
                 });
                 break;
