@@ -2,9 +2,6 @@ name: Onix Docker PostgreSQL
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - master
 
 permissions:
   actions: read
