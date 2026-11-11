@@ -3577,6 +3577,10 @@ function registry_consentpromise_rejected(e)
     }
 }
 
+function sendFileUploadError(tunnel, error) {
+    tunnel.write(Buffer.from(JSON.stringify({ action: 'uploaderror', reqid: tunnel.httprequest.uploadFileid, path: tunnel.httprequest.uploadFilePath, error: (error && error.message) ? error.message : String(error) })));
+}
+
 function onTunnelData(data)
 {
     //sendConsoleText('OnTunnelData, ' + data.length + ', ' + typeof data + ', ' + data);
@@ -3587,11 +3591,11 @@ function onTunnelData(data)
         if (data[0] == 0) {
             // If data starts with zero, skip the first byte. This is used to escape binary file data from JSON.
             this.httprequest.uploadFileSize += (data.length - 1);
-            try { fs.writeSync(this.httprequest.uploadFile, data, 1, data.length - 1); } catch (ex) { sendConsoleText('FileUpload Error'); this.write(Buffer.from(JSON.stringify({ action: 'uploaderror' }))); return; } // Write to the file, if there is a problem, error out.
+            try { fs.writeSync(this.httprequest.uploadFile, data, 1, data.length - 1); } catch (ex) { sendFileUploadError(this, ex); return; } // Write to the file, if there is a problem, error out.
         } else {
             // If data does not start with zero, save as-is.
             this.httprequest.uploadFileSize += data.length;
-            try { fs.writeSync(this.httprequest.uploadFile, data); } catch (ex) { sendConsoleText('FileUpload Error'); this.write(Buffer.from(JSON.stringify({ action: 'uploaderror' }))); return; } // Write to the file, if there is a problem, error out.
+            try { fs.writeSync(this.httprequest.uploadFile, data); } catch (ex) { sendFileUploadError(this, ex); return; } // Write to the file, if there is a problem, error out.
         }
         this.write(Buffer.from(JSON.stringify({ action: 'uploadack', reqid: this.httprequest.uploadFileid }))); // Ask for more data.
         return;
@@ -4190,9 +4194,12 @@ function onTunnelData(data)
                 }
                 case 'rm': {
                     // Delete, possibly recursive delete
+                    var errors = [];
                     for (var i in cmd.delfiles) {
                         var p = obj.path.join(cmd.path, cmd.delfiles[i]), delcount = 0;
-                        try { delcount = deleteFolderRecursive(p, cmd.rec); } catch (ex) { }
+                        try { delcount = deleteFolderRecursive(p, cmd.rec); } catch (ex) {
+                            errors.push({ path: (ex && ex.path) || p, error: (ex && ex.message) ? ex.message : String(ex) });
+                        }
                         if ((delcount == 1) && !cmd.rec) {
                             MeshServerLogEx(45, [p], "Delete: \"" + p + "\"", this.httprequest);
                         } else {
@@ -4203,6 +4210,7 @@ function onTunnelData(data)
                             }
                         }
                     }
+                    if (errors.length > 0) { this.write(Buffer.from(JSON.stringify({ action: 'fileerror', operation: 'rm', reqid: cmd.reqid, errors: errors }))); }
                     break;
                 }
                 case 'open': {
@@ -4289,8 +4297,8 @@ function onTunnelData(data)
                         var filepath = cmd.name ? obj.path.join(cmd.path, cmd.name) : cmd.path;
                         this.httprequest.uploadFilePath = filepath;
                         this.httprequest.uploadFileSize = 0;
-                        try { this.httprequest.uploadFile = fs.openSync(filepath, cmd.append ? 'abN' : 'wbN'); } catch (ex) { this.write(Buffer.from(JSON.stringify({ action: 'uploaderror', reqid: cmd.reqid }))); break; }
                         this.httprequest.uploadFileid = cmd.reqid;
+                        try { this.httprequest.uploadFile = fs.openSync(filepath, cmd.append ? 'abN' : 'wbN'); } catch (ex) { sendFileUploadError(this, ex); break; }
                         if (this.httprequest.uploadFile) { this.write(Buffer.from(JSON.stringify({ action: 'uploadstart', reqid: this.httprequest.uploadFileid }))); }
                         break;
                     }
@@ -4439,7 +4447,7 @@ function deleteFolderRecursive(path, rec) {
                 if (fs.statSync(curPath).isDirectory()) { // recurse
                     count += deleteFolderRecursive(curPath, true);
                 } else { // delete file
-                    fs.unlinkSync(curPath);
+                    try { fs.unlinkSync(curPath); } catch (ex) { throw { path: curPath, message: (ex && ex.message) ? ex.message : String(ex) }; }
                     count++;
                 }
             });

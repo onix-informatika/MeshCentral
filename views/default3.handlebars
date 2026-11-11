@@ -14318,6 +14318,42 @@
 
         function p13fileOperationDialogEx(b) { if ((b == 0) && (files != null)) { files.sendText({ action: 'cancel' }); } }
 
+        // File failures must remain visible after the file list refreshes.
+        function p13fileOperationError(data) {
+            // A delete/upload confirmation may still be fading out when the agent replies.
+            if (xxModal != null) {
+                Q('xxAddAgentModal').addEventListener('hidden.bs.modal', function () { p13fileOperationError(data); }, { once: true });
+                hideModal();
+                return;
+            }
+            var errors = data.errors || [{ path: data.path || '', error: data.error || "The remote device did not return an error description." }];
+            var html = '<div style="max-height:240px;overflow:auto;word-break:break-word">';
+            for (var i = 0; i < errors.length; i++) {
+                html += '<p><b>' + EscapeHtml(errors[i].path || '') + '</b><br>' + EscapeHtml(errors[i].error || '') + '</p>';
+            }
+            html += '</div><p>' + "Close the application using the file and retry. Also check the file permissions and free disk space." + '</p>';
+            if ((filesNode != null) && (filesNode.agent != null) && ((GetNodeRights(filesNode) & 16) != 0)) {
+                html += '<p>' + "If Mesh Agent is holding the file, restarting its service can release the lock." + '</p><input type=button value="' + "Restart agent service" + '" onclick=p13restartAgentForFiles()>';
+            }
+            setDialogMode(2, (data.operation == 'rm') ? "Delete failed" : "Upload failed", 1, null, html);
+            showModal('xxAddAgentModal', 'idx_dlgOkButton');
+        }
+
+        function p13restartAgentForFiles() {
+            if ((filesNode == null) || (filesNode.agent == null) || ((GetNodeRights(filesNode) & 16) == 0)) return;
+            var html = '<p>' + format("Restart Mesh Agent on {0}?", EscapeHtml(filesNode.name)) + '</p><p>' + "This disconnects all remote sessions to this device. It releases locks held by Mesh Agent. Files held by other applications will remain locked." + '</p>';
+            setDialogMode(2, "Restart agent service", 3, p13restartAgentForFilesEx, html, filesNode._id);
+            showModal('xxAddAgentModal', 'idx_dlgOkButton', p13restartAgentForFilesEx, 1, filesNode._id);
+        }
+
+        function p13restartAgentForFilesEx(button, nodeid) {
+            if (button != 1) return;
+            meshserver.send({ action: 'msg', type: 'console', nodeid: nodeid, value: 'service restart' });
+            messagebox("Restart agent service", "Restart requested. Reconnect to Files after the device comes online, then retry the file operation.");
+            showModal('xxAddAgentModal', 'idx_dlgOkButton');
+            return false; // Keep the request acknowledgement visible.
+        }
+
         function p13gotFiles(data) {
             if ((data.length > 0) && (data.charCodeAt(0) != 123)) { p13gotDownloadBinaryData(data); return; } // This is ok because 4 first bytes is a control value.
             //console.log('p13gotFiles', data);
@@ -14343,6 +14379,7 @@
 
             // Process file upload commands
             if ((data.action != null) && (data.action.startsWith('upload'))) { p13gotUploadData(data); return; }
+            if (data.action == 'fileerror') { p13fileOperationError(data); return; }
 
             // Process any SSH actions
             switch (data.action) {
@@ -15242,7 +15279,7 @@
 
         // Receive upload ack from the mesh agent, use this to keep sending more data
         function p13gotUploadData(cmd) {
-            if ((uploadFile == null) || (parseInt(uploadFile.xfilePtr) != parseInt(cmd.reqid))) { return; }
+            if ((uploadFile == null) || ((parseInt(uploadFile.xfilePtr) != parseInt(cmd.reqid)) && !((cmd.action == 'uploaderror') && (cmd.reqid == null)))) { return; }
             if (cmd.action == 'uploadack' && uploadFile.uploaddoneSent) { return; }
             switch (cmd.action) {
                 case 'uploadstart':
@@ -15265,7 +15302,13 @@
                     p13folderup(9999); // Refresh file list after each file
                     if (uploadFile.xfiles.length > uploadFile.xfilePtr + 1) { p13uploadNextFile(); } else { p13uploadFileTransferDone(); }
                     break;
-                case 'uploaderror': { p13uploadFileCancel(); break; }
+                case 'uploaderror': {
+                    var failedFile = uploadFile.xfiles[uploadFile.xfilePtr];
+                    if (!cmd.path) { cmd.path = uploadFile.xpath + '/' + (failedFile ? failedFile.name : ''); }
+                    p13uploadFileCancel();
+                    p13fileOperationError(cmd);
+                    break;
+                }
                 case 'uploadhash': {
                     var file = uploadFile.xfiles[uploadFile.xfilePtr];
                     if (file) {
