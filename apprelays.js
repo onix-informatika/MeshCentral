@@ -57,6 +57,7 @@ const MESHRIGHT_RESETOFF            = 0x00040000; // 262144
 const MESHRIGHT_GUESTSHARING        = 0x00080000; // 524288
 const MESHRIGHT_DEVICEDETAILS       = 0x00100000; // 1048576
 const MESHRIGHT_RELAY               = 0x00200000; // 2097152
+const MESHRIGHT_NOREGISTRY          = 0x00400000; // 4194304
 const MESHRIGHT_ADMIN               = 0xFFFFFFFF;
 
 // SerialTunnel object is used to embed TLS within another connection.
@@ -531,6 +532,11 @@ module.exports.CreateWebRelay = function (parent, db, args, domain, mtype) {
     obj.socketContentLengthRemaining = 0;
     function processHttpData(data) {
         //console.log('processHttpData', data.length);
+        // If already in streaming mode, forward directly without accumulating to avoid memory leaks. This is used for streaming responses like SSE (Server-Sent Events).
+        if (obj.isStreaming) {
+            try { obj.res.write(data, 'binary'); } catch (ex) { }
+            return;
+        }
         obj.socketAccumulator += data;
         while (true) {
             //console.log('ACC(' + obj.socketAccumulator + '): ' + obj.socketAccumulator);
@@ -556,8 +562,15 @@ module.exports.CreateWebRelay = function (parent, db, args, domain, mtype) {
 
                 // Check if this is a streaming response
                 if ((obj.socketXHeader['content-type'] != null) && (obj.socketXHeader['content-type'].toLowerCase().indexOf('text/event-stream') >= 0)) {
-                    obj.isStreaming = true; // This tunnel is now a streaming tunnel and will not close anytime soon.
-                    if (obj.onNextRequest != null) obj.onNextRequest(); // Call this so that any HTTP requests that are waitting for this one to finish get handled by a new tunnel.
+                    obj.isStreaming = true;
+                    if (obj.onNextRequest != null) obj.onNextRequest();
+                    // Forward headers, then clear accumulator and switch to direct forward mode
+                    processHttpResponse(obj.socketXHeader, null, false);
+                    if (obj.socketAccumulator.length > 0) {
+                        try { obj.res.write(obj.socketAccumulator, 'binary'); } catch (ex) { }
+                        obj.socketAccumulator = ''; // Free the memory to avoid memory leaks
+                    }
+                    return; // Exit the while loop, future data handled directly
                 }
 
                 // Check if this HTTP request has a body
@@ -985,6 +998,7 @@ module.exports.CreateMstscRelay = function (parent, db, ws, req, args, domain) {
                     parent.GetNodeWithRights(domain, obj.userid, obj.nodeid, function (node, rights, visible) {
                         if (obj.ws == null) return; // obj has been cleaned up, just exit.
                         if ((node == null) || (visible == false) || ((rights & MESHRIGHT_REMOTECONTROL) == 0)) { obj.close(); return; }
+                        if ((rights != MESHRIGHT_ADMIN) && ((rights & MESHRIGHT_NODESKTOP) != 0)) { obj.close(); return; }
                         if ((rights != MESHRIGHT_ADMIN) && ((rights & MESHRIGHT_REMOTEVIEWONLY) != 0)) { obj.viewonly = true; }
                         if ((rights != MESHRIGHT_ADMIN) && ((rights & MESHRIGHT_DESKLIMITEDINPUT) != 0)) { obj.limitedinput = true; }
                         node = parent.common.unEscapeLinksFieldName(node); // unEscape node data for rdp/ssh credentials
@@ -1105,6 +1119,7 @@ module.exports.CreateMstscRelay = function (parent, db, ws, req, args, domain) {
 module.exports.CreateSshRelay = function (parent, db, ws, req, args, domain) {
     const Net = require('net');
     const WebSocket = require('ws');
+    ws._socket.pause();
     
     // SerialTunnel object is used to embed SSH within another connection.
     function SerialTunnel(options) {
@@ -1407,10 +1422,11 @@ module.exports.CreateSshRelay = function (parent, db, ws, req, args, domain) {
     obj.userid = obj.cookie.userid;
 
     // Get the meshid for this device
-    parent.parent.db.Get(obj.cookie.nodeid, function (err, nodes) {
+    parent.GetNodeWithRights(domain, obj.userid, obj.cookie.nodeid, function (node, rights, visible) {
         if (obj.cookie == null) return; // obj has been cleaned up, just exit.
-        if ((err != null) || (nodes == null) || (nodes.length != 1)) { parent.parent.debug('relay', 'SSH: Invalid device'); obj.close(); }
-        const node = parent.common.unEscapeLinksFieldName(nodes[0]); // unEscape node data for rdp/ssh credentials
+        if ((node == null) || (visible == false) || ((rights & MESHRIGHT_REMOTECONTROL) == 0)) { obj.close(); return; }
+        if ((rights != MESHRIGHT_ADMIN) && ((rights & MESHRIGHT_NOTERMINAL) != 0)) { obj.close(); return; }
+        node = parent.common.unEscapeLinksFieldName(node); // unEscape node data for rdp/ssh credentials
         obj.nodeid = node._id; // Store the NodeID
         obj.meshid = node.meshid; // Store the MeshID
         obj.mtype = node.mtype; // Store the device group type
@@ -1429,9 +1445,11 @@ module.exports.CreateSshRelay = function (parent, db, ws, req, args, domain) {
                 // Re-encode a cookie with a device relay
                 const cookieContent = { userid: obj.cookie.userid, domainid: obj.cookie.domainid, nodeid: mesh.relayid, tcpaddr: node.host, tcpport: obj.cookie.tcpport };
                 obj.xcookie = parent.parent.encodeCookie(cookieContent, parent.parent.loginCookieEncryptionKey);
+                ws._socket.resume();
             });
         } else {
             obj.xcookie = req.query.auth;
+            ws._socket.resume();
         }
     });
 
@@ -1743,11 +1761,11 @@ module.exports.CreateSshTerminalRelay = function (parent, db, ws, req, domain, u
     if ((user == null) || (req.query.nodeid == null)) { obj.close(); return; } // Invalid nodeid
     parent.GetNodeWithRights(domain, user, req.query.nodeid, function (node, rights, visible) {
         if (obj.ws == null) return; // obj has been cleaned up, just exit.
-        node = parent.common.unEscapeLinksFieldName(node); // unEscape node data for rdp/ssh credentials
 
         // Check permissions
-        if ((rights & 8) == 0) { obj.close(); return; } // No MESHRIGHT_REMOTECONTROL rights
-        if ((rights != 0xFFFFFFFF) && (rights & 0x00000200)) { obj.close(); return; } // MESHRIGHT_NOTERMINAL is set
+        if ((node == null) || (visible == false) || ((rights & MESHRIGHT_REMOTECONTROL) == 0)) { obj.close(); return; }
+        if ((rights != MESHRIGHT_ADMIN) && ((rights & MESHRIGHT_NOTERMINAL) != 0)) { obj.close(); return; }
+        node = parent.common.unEscapeLinksFieldName(node); // unEscape node data for rdp/ssh credentials
         obj.mtype = node.mtype; // Store the device group type
         obj.nodeid = node._id; // Store the NodeID
         obj.meshid = node.meshid; // Store the MeshID
@@ -2295,11 +2313,11 @@ module.exports.CreateSshFilesRelay = function (parent, db, ws, req, domain, user
     if ((user == null) || (req.query.nodeid == null)) { obj.close(); return; } // Invalid nodeid
     parent.GetNodeWithRights(domain, user, req.query.nodeid, function (node, rights, visible) {
         if (obj.ws == null) return; // obj has been cleaned up, just exit.
-        node = parent.common.unEscapeLinksFieldName(node); // unEscape node data for rdp/ssh credentials
 
         // Check permissions
-        if ((rights & 8) == 0) { obj.close(); return; } // No MESHRIGHT_REMOTECONTROL rights
-        if ((rights != 0xFFFFFFFF) && (rights & 0x00000200)) { obj.close(); return; } // MESHRIGHT_NOTERMINAL is set
+        if ((node == null) || (visible == false) || ((rights & MESHRIGHT_REMOTECONTROL) == 0)) { obj.close(); return; }
+        if ((rights != MESHRIGHT_ADMIN) && ((rights & MESHRIGHT_NOFILES) != 0)) { obj.close(); return; }
+        node = parent.common.unEscapeLinksFieldName(node); // unEscape node data for rdp/ssh credentials
         obj.mtype = node.mtype; // Store the device group type
         obj.nodeid = node._id; // Store the NodeID
         obj.meshid = node.meshid; // Store the MeshID

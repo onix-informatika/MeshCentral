@@ -1,5 +1,19 @@
+FROM node:24.22.1-alpine3.24 AS node-amd64
+FROM node:24.22.1-alpine3.24 AS node-arm64
+
+# The node:24 Alpine images are not published for 32-bit ARM, so arm/v6 and arm/v7 use Alpine's nodejs.
+FROM alpine:3.24 AS node-arm
+
+RUN apk add --no-cache --update \
+        nodejs npm
+
+FROM node-${TARGETARCH} AS node-base
+
+RUN apk add --no-cache --update \
+        jq tzdata
+
 ### STAGE 1 BUILDING.
-FROM alpine:3.23 AS builder
+FROM node-base AS mesh-compiler
 
 # Any value inside one of the disable ARGs will be accepted.
 ARG DISABLE_EXTRACT="yes"
@@ -8,9 +22,7 @@ ARG DISABLE_TRANSLATE="yes"
 #    NODE_OPTIONS="--max_old_space_size=4096"
 # If your process gets OOM killed, perhaps the above will help.
 
-RUN apk add --no-cache --update \
-        nodejs npm; \
-    mkdir -p /opt/meshcentral/meshcentral
+RUN mkdir -p /opt/meshcentral/meshcentral
 WORKDIR /opt/meshcentral
 COPY ./ /opt/meshcentral/meshcentral/
 
@@ -49,13 +61,13 @@ RUN rm -rf /opt/meshcentral/meshcentral/docker /opt/meshcentral/meshcentral/node
 
 ### STAGE 2 PRECOMPILE DEPS MODULE
 
-FROM alpine:3.23 AS dep-compiler
+FROM node-base AS dep-compiler
 
 RUN echo -e "----------\nINSTALLING ALPINE PACKAGES...\n----------"; \
     apk add --no-cache --update \
-        bash gcc g++ jq make nodejs npm python3 tzdata
+        bash gcc g++ make python3
 
-COPY --from=builder /opt/meshcentral/meshcentral /opt/meshcentral/meshcentral
+COPY --from=mesh-compiler /opt/meshcentral/meshcentral /opt/meshcentral/meshcentral
 WORKDIR /opt/meshcentral/meshcentral
 
 RUN jq '.dependencies += {"modern-syslog": "1.2.0", "telegram": "2.26.22"}' package.json > temp.json && mv temp.json package.json \
@@ -65,7 +77,7 @@ RUN jq '.dependencies += {"modern-syslog": "1.2.0", "telegram": "2.26.22"}' pack
 
 ### STAGE 3 BUILDING.
 
-FROM alpine:3.23 AS finalizer
+FROM node-base AS finalizer
 
 # copy files from previous layer
 COPY --from=dep-compiler /opt/meshcentral/meshcentral /opt/meshcentral/meshcentral
@@ -131,15 +143,14 @@ ENV MARIADB_HOST="" \
 RUN echo -e "----------\nINSTALLING ALPINE PACKAGES...\n----------"; \
     mkdir -p /opt/meshcentral/meshcentral; \
     apk add --no-cache --update \
-        bash curl jq nodejs npm tzdata && \
+        bash curl && \
     rm -rf /var/cache/* \
         /tmp/* \
         /usr/share/man/ \
         /usr/share/doc/ \
         /var/log/* \
         /var/spool/* \
-        /usr/lib/debug/ && \
-    npm install -g npm@latest
+        /usr/lib/debug/
 
 WORKDIR /opt/meshcentral
 
@@ -147,7 +158,7 @@ RUN case "$PREINSTALL_LIBS" in \
         true|yes|TRUE|YES) \
             cd meshcentral && \
             echo -e "----------\nPREINSTALLING LIBRARIES...\n----------"; \
-            npm install ssh2@1.16.0 nodemailer@6.10.1 image-size@2.0.2 wildleek@2.0.0 otplib@12.0.1 yub@0.11.1;; \
+            npm install ssh2@1.17.0 nodemailer@6.10.1 image-size@2.0.2 wildleek@2.0.0 yub@0.11.1;; \
         false|no|FALSE|NO) \
             echo "Not pre-installing libraries.";; \
         *) \
@@ -174,7 +185,7 @@ RUN case "$INCLUDE_POSTGRESQL_TOOLS" in \
             apk add --no-cache postgresql-client && \
             cd meshcentral && \
             echo -e "----------\nPREINSTALLING POSTGRESQL LIBRARIES...\n----------"; \
-            npm install pg@8.14.1;; \
+            npm install pg@8.16.3;; \
         false|no|FALSE|NO) \
             echo "Not including PostgreSQL Tools.";; \
         *) \
@@ -187,7 +198,7 @@ RUN case "$INCLUDE_MARIADB_TOOLS" in \
             apk add --no-cache mariadb-client && \
             cd meshcentral && \
             echo -e "----------\nPREINSTALLING MARIADB/MYSQL LIBRARIES...\n----------"; \
-            npm install mariadb@3.4.0 mysql2@3.11.4;; \
+            npm install mariadb@3.4.5 mysql2@3.15.1;; \
         false|no|FALSE|NO) \
             echo "Not including MariaDB/MySQL Tools.";; \
         *) \
@@ -197,7 +208,7 @@ RUN case "$INCLUDE_MARIADB_TOOLS" in \
 
 # Remove left over files and cache
 RUN cd meshcentral \
-    && rm -rf /root /tmp/* /var/tmp/* /usr/lib/node_modules/npm/man /usr/lib/node_modules/npm/doc /usr/lib/node_modules/npm/html \
+    && rm -rf /root /tmp/* /var/tmp/* /usr/local/lib/node_modules/npm/man /usr/local/lib/node_modules/npm/doc /usr/local/lib/node_modules/npm/html \
     && npm cache clean --force
 
 # Expose needed ports

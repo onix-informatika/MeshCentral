@@ -684,8 +684,11 @@ function CreateDesktopMultiplexor(parent, domain, nodeid, id, func) {
             if (data.length >= 12) {
                 command = data.readUInt16BE(8);
                 cmdsize = data.readUInt32BE(4);
-                if (data.length == (cmdsize + 8)) {
-                    data = data.slice(8, data.length);
+                // The agent pads jumbo packets up to an 8-byte boundary, so data.length is
+                // usually 1..7 bytes longer than (cmdsize + 8). The previous exact-equality
+                // check classified those complete frames as partial and dropped them.
+                if (data.length >= (cmdsize + 8)) {
+                    data = data.slice(8, cmdsize + 8);
                 } else {
                     console.log('TODO-PARTIAL-JUMBO', command, cmdsize, data.length);
                     return; // TODO
@@ -1052,8 +1055,8 @@ function CreateMeshRelayEx2(parent, ws, req, domain, user, cookie) {
     // Check relay authentication
     if ((user == null) && (obj.req.query != null) && (obj.req.query.rauth != null)) {
         const rcookie = parent.parent.decodeCookie(obj.req.query.rauth, parent.parent.loginCookieEncryptionKey, 240); // Cookie with 4 hour timeout
-        if (rcookie.ruserid != null) { obj.ruserid = rcookie.ruserid; } else if (rcookie.nouser === 1) { obj.rnouser = true; }
-        if (rcookie.nodeid != null) { obj.nodeid = rcookie.nodeid; }
+        if (rcookie != null) { if (rcookie.ruserid != null) { obj.ruserid = rcookie.ruserid; } else if (rcookie.nouser === 1) { obj.rnouser = true; } }
+        if (rcookie != null) { if (rcookie.nodeid != null) { obj.nodeid = rcookie.nodeid; } }
     }
 
     // If there is no authentication, drop this connection
@@ -1139,6 +1142,7 @@ function CreateMeshRelayEx2(parent, ws, req, domain, user, cookie) {
                         command.realname = user.realname;   // Add real name
                     }
                     if (typeof domain.desktopprivacybartext == 'string') { command.privacybartext = domain.desktopprivacybartext; } // Privacy bar text
+                    if ((typeof domain.desktopprivacybarmaxwidth == 'number') && (domain.desktopprivacybarmaxwidth > 0)) { command.privacybarmaxwidth = domain.desktopprivacybarmaxwidth; } // Privacy bar maximum width
                     delete command.nodeid;              // Remove the nodeid since it's implyed.
                     agent.send(JSON.stringify(command));
                     return true;
@@ -1161,6 +1165,7 @@ function CreateMeshRelayEx2(parent, ws, req, domain, user, cookie) {
                             command.realname = user.realname;       // Add real name
                         }
                         if (typeof domain.desktopprivacybartext == 'string') { command.privacybartext = domain.desktopprivacybartext; } // Privacy bar text
+                        if ((typeof domain.desktopprivacybarmaxwidth == 'number') && (domain.desktopprivacybarmaxwidth > 0)) { command.privacybarmaxwidth = domain.desktopprivacybarmaxwidth; } // Privacy bar maximum width
                         parent.parent.multiServer.DispatchMessageSingleServer(command, routing.serverid);
                         return true;
                     }
