@@ -272,6 +272,11 @@
             "none"
           ]
         },
+        "sessionSecure": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true and tlsOffload is set, the session cookie is marked Secure on requests the reverse proxy reports as HTTPS through X-Forwarded-Proto. Use this when the proxy in front of MeshCentral only accepts HTTPS."
+        },
         "dbEncryptKey": {
           "type": "string",
           "default": null,
@@ -569,6 +574,58 @@
           "default": false,
           "description": "Enables agent-side, websocket per-message deflate compression. wscompression must also be true for this to work."
         },
+        "bitlockerKeyRetentionDays": {
+          "type": "integer",
+          "default": 0,
+          "description": "How many days to retain a BitLocker recovery key after the agent last read it, so a key stays available while a volume is locked or detached. Especially useful for Bitlocker To Go devices. 0 (default) disables carry-forward: only keys read in the latest scan are kept."
+        },
+        "agentDownloads": {
+          "type": "object",
+          "description": "Download missing default agent files from the exact public GitHub releases in the default release manifest. Public release downloads do not require a GitHub token.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Allow downloads of missing default files and release update checks. Set to false to disable both; verified cached files and locally supplied files are still loaded."
+            },
+            "manifest": {
+              "type": "string",
+              "description": "Optional release manifest path, relative to meshcentral-data or absolute, laid over agents/agent-defaults.json shipped with MeshCentral. Each file it lists replaces the shipped pin for that file, and files it does not list keep the shipped pin. Files with no agent type on this server are ignored. Changing this file requires a restart."
+            },
+            "checkIntervalHours": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 168,
+              "default": 24,
+              "description": "Check the configured repositories for stable releases at this interval, with a small random delay. Zero disables scheduled checks. Checks never change defaults or deploy agents. All network checks are disabled when enabled is false."
+            },
+            "fetchReleases": {
+              "type": "boolean",
+              "default": true,
+              "description": "Keep a local copy of each new release found by the scheduled check, under meshcentral-data/agentbuilds/<tag>/. Copies are never served until an administrator uses them. Set to false to only report new releases."
+            },
+            "includePrereleases": {
+              "type": "boolean",
+              "default": false,
+              "description": "Also copy releases marked as prereleases, such as testing builds."
+            },
+            "keepReleases": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100,
+              "default": 3,
+              "description": "How many of the newest releases per repository to keep a copy of. Older copies are removed; the pinned defaults are never removed. Zero keeps every copy."
+            },
+            "minFreeSpaceMiB": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1048576,
+              "default": 256,
+              "description": "Free disk space, in MiB, that must remain after a download. A default file or release copy that would leave less is not downloaded and is reported."
+            }
+          }
+        },
         "noAgentUpdate": {
           "type": "integer",
           "default": 0,
@@ -583,6 +640,11 @@
           "type": "boolean",
           "default": true,
           "description": "Set to false to not allow temporary agents to be updated."
+        },
+        "disableRecoveryAgent": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, rejects recovery agent connections (agents with capability bit 0x40)."
         },
         "amtScanner": {
           "type": "boolean",
@@ -605,7 +667,7 @@
         "npmProxy": {
           "type": "string",
           "format": "uri",
-          "description": "HTTP proxy to use when downloading npm packages."
+          "description": "HTTP proxy to use when downloading npm packages and the default agent files."
         },
         "allowHighQualityDesktop": {
           "type": "boolean",
@@ -639,6 +701,11 @@
           "type": "boolean",
           "default": null,
           "description": "Execute this when the server has to restart due to an error. The first parameter will be the server version."
+        },
+        "RestartOnServerError": {
+          "type": "boolean",
+          "default": true,
+          "description": "When false, the built-in supervisor exits after an unexpected child server error instead of restarting the child. Expected restarts for configuration changes, certificate updates, server updates and administrator requests are not affected. External service managers may start MeshCentral again according to their own restart policy."
         },
         "publicPushNotifications": {
           "type": "boolean",
@@ -679,6 +746,14 @@
           "default": null,
           "description": "When set, only agents from allowed IP address ranges can connect to the server. Example: \"192.168.2.100,192.168.1.0/24\" \"file:agentAllowedIP.txt\""
         },
+        "agentAllowedIPNewAgents": {
+          "type": [
+            "string",
+            "array"
+          ],
+          "default": null,
+          "description": "When set, only new agents from allowed IP address ranges can enroll. Existing agents can reconnect from other addresses unless agentAllowedIP or agentBlockedIP restricts them. Example: \"192.168.2.100,192.168.1.0/24\" \"file:agentAllowedIPNewAgents.txt\""
+        },
         "agentBlockedIP": {
           "type": [
             "string",
@@ -687,10 +762,47 @@
           "default": null,
           "description": "When set, agents from these denied IP address ranges will not be able to connect to the server. Example: \"192.168.2.100,192.168.1.0/24\" \"file:agentBlockedIP.txt\""
         },
+        "agentEnrollmentRateLimitByIP": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Limits new agent registrations by exact source IP using a sliding time window. Additional registrations are denied until enough registrations fall outside the window. Existing agent reconnections do not count toward the limit.",
+          "properties": {
+            "autoBlock": {
+              "type": "boolean",
+              "default": true,
+              "description": "When true, all agent traffic from an IP that reaches the enrollment limit is blocked. The block is temporary unless settings.agentBlockedIP uses a file: source, in which case the exact IP is appended to that file and blocked permanently. When false, only additional new agent registrations are denied."
+            },
+            "exclude": {
+              "type": [
+                "string",
+                "array"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "default": null,
+              "description": "IP addresses or ranges that are not subject to the new agent registration limit. For example: \"192.168.1.0/24,172.16.0.1\"."
+            },
+            "minutes": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Sliding time window in minutes."
+            },
+            "agents": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum number of new agents that one source IP may register within the time window."
+            }
+          },
+          "required": [
+            "minutes",
+            "agents"
+          ]
+        },
         "authLog": {
           "type": "string",
           "default": null,
-          "description": "File path and name of the authentication log to be created. This log can be parsed by Fail2ban."
+          "description": "File path and name of the authentication log to be created. This log can be parsed by Fail2ban. Carriage returns and line feeds in messages are escaped as literal \\r and \\n sequences so each event occupies one line."
         },
         "InterUserMessaging": {
           "type": "array",
@@ -935,6 +1047,12 @@
               "default": 10,
               "description": "How many days of backups should the autobackup keep? Default is 10 Days worth"
             },
+            "minFreeSpaceMb": {
+              "type": "integer",
+              "default": 200,
+              "minimum": 0,
+              "description": "Minimum free disk space in megabytes on the backup path. The backup is skipped when less is free. Set to 0 to disable the check."
+            },
             "zipCompression": {
               "type": "integer",
               "default": "5",
@@ -975,6 +1093,10 @@
               "type": "array",
               "default": [],
               "description": "Glob for ignoring directories in the data directory. For example [\"**/signedagents\"]"
+            },
+            "globNocase": {
+              "type": "boolean",
+              "description": "Enable case-insensitive glob matching. Defaults: true on Windows, false elsewhere."
             },
             "googleDrive": {
               "type": "object",
@@ -1096,6 +1218,16 @@
               "type": "integer",
               "default": 10,
               "description": "Maximum number of invalid login attempts from an IP address in the time period."
+            },
+            "blocking": {
+              "type": "string",
+              "default": "iprange",
+              "enum": [
+                "iprange",
+                "ip",
+                "username"
+              ],
+              "description": "Selects what is blocked when the invalid login limit is reached. 'iprange' (default) keeps the current behavior of blocking IPv4 /24 ranges, 'ip' blocks the exact client IP, and 'username' blocks only the login name."
             },
             "coolofftime": {
               "type": "integer",
@@ -1250,6 +1382,55 @@
             "default": null,
             "description": "Web site .png logo file that is 512x512 in size placed in meshcentral-data that is used for PWA installs on iOS and Android."
           },
+          "pwa": {
+            "type": "object",
+            "description": "Configuration and customization of the manifest for Progressive Web App mode. See https://w3c.github.io/manifest/#typical-structure for reference.",
+            "properties": {
+              "disabled": {
+                "type": "boolean",
+                "default": "false",
+                "description": "Disables the PWA manifest. Returns a 404 if present and 'true'."
+              },
+              "name": {
+                "type": "string",
+                "default": "MeshCentral",
+                "description": "Preferred PWA app name. See https://w3c.github.io/manifest/#name-member."
+              },
+              "short_name": {
+                "type": "string",
+                "default": "MeshCentral",
+                "description": "Preferred PWA short name when there is insufficient space for the name. See https://w3c.github.io/manifest/#short_name-member."
+              },
+              "orientation": {
+                "type": "string",
+                "default": "any",
+                "description": "Preferred PWA screen orientation. See https://w3c.github.io/manifest/#orientation-member."
+              },
+              "display": {
+                "type": "string",
+                "default": "fullscreen",
+                "description": "Preferred PWA display mode. See https://w3c.github.io/manifest/#display-member."
+              },
+              "themeColor": {
+                "type": "string",
+                "default": "#ffffff",
+                "description": "Preferred PWA theme color (HTML). See https://w3c.github.io/manifest/#theme_color-member."
+              },
+              "backgroundColor": {
+                "type": "string",
+                "default": "#ffffff",
+                "description": "Preferred PWA background color (HTML). See https://w3c.github.io/manifest/#background_color-member."
+              },
+              "icons": {
+                "type": "object",
+                "description": "If present, redefines the default icon object. See https://w3c.github.io/manifest/#declaring-multiple-icons for reference."
+              },
+              "shortcuts": {
+                "type": "object",
+                "description": "If present, a shortcuts object with sub urls of the web ui can be defined and accessed via taskbar right-click or long-press action on the app icon on mobile. See https://w3c.github.io/manifest/#creating-shortcuts for reference."
+              }
+            }
+          },          
           "rootRedirect": {
             "type": "string",
             "default": null,
@@ -1783,7 +1964,7 @@
               "force2factor": {
                 "type": "boolean",
                 "default": false,
-                "description": "Requires that all accounts setup 2FA."
+                "description": "Requires that all accounts setup 2FA. Until an account has a second factor, the server only accepts the account security commands and refuses device, relay and file access."
               },
               "skip2factor": {
                 "type": "string",
@@ -2230,6 +2411,11 @@
                 "default": null,
                 "description": "The filename of a image file in .png format located in meshcentral-data to display in the MeshCentral Agent installation dialog, image should be square and from 64x64 to 200x200."
               },
+              "macosinstallerimage": {
+                "type": "string",
+                "default": null,
+                "description": "The filename of a background image file in .png format located in meshcentral-data to display in the macOS installer."
+              },
               "fileName": {
                 "type": "string",
                 "default": "meshagent",
@@ -2361,6 +2547,14 @@
             "default": null,
             "description": "When set, only agents from allowed IP address ranges can connect to the server. Example: \"192.168.2.100,192.168.1.0/24\" \"file:agentAllowedIP.txt\""
           },
+          "agentAllowedIPNewAgents": {
+            "type": [
+              "string",
+              "array"
+            ],
+            "default": null,
+            "description": "When set, only new agents from allowed IP address ranges can enroll in this domain. Existing agents can reconnect from other addresses unless agentAllowedIP or agentBlockedIP restricts them. Example: \"192.168.2.100,192.168.1.0/24\" \"file:agentAllowedIPNewAgents.txt\""
+          },
           "agentBlockedIP": {
             "type": [
               "string",
@@ -2428,6 +2622,11 @@
           "desktopPrivacyBarText": {
             "type": "string",
             "description": "This is the text that will be shown in the remote desktop privacy bar. You can use {0} to display the account realname or {1} to display the account identifier in the string."
+          },
+          "desktopPrivacyBarMaxWidth": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum width of the remote desktop privacy bar in pixels. When not set, the agent determines the width."
           },
           "limits": {
             "type": "object",
@@ -3573,6 +3772,15 @@
                     "type": "string",
                     "format": "uri",
                     "description": "Then set, the user will be redirected to this URL when hitting the logout link."
+                  },
+                  "acceptedClockSkewMs": {
+                    "type": "number",
+                    "description": "Time in milliseconds of skew acceptable between client and server when checking NotBefore and NotOnOrAfter assertion condition validity timestamps. Setting to -1 disables checking these conditions entirely.",
+                    "default": 0
+                  },
+                  "maxAssertionAgeMs": {
+                    "type": "number",
+                    "description": "Amount of time in milliseconds after which the framework considers an assertion expired. If stricter than NotOnOrAfter, this limit is used when determining if an assertion is expired."
                   }
                 },
                 "required": [
@@ -4016,7 +4224,7 @@
                   },
                   "groups": {
                     "type": "object",
-                    "description": "Group settings for OIDC",
+                    "description": "Group settings for OIDC. Group names may be case sensitive!",
                     "properties": {
                       "recursive": {
                         "type": "boolean",

@@ -1,5 +1,8 @@
 #!/bin/bash
 
+echo "NodeJS: $(node -v)"
+echo "NPM: $(npm -v)"
+
 # Origin: https://github.com/Melo-Professional/MeshCentral-Stylish-UI
 stylishui_base_url="https://github.com/Melo-Professional/MeshCentral-Stylish-UI/archive/refs"
 stylishui_compat="https://raw.githubusercontent.com/Melo-Professional/MeshCentral-Stylish-UI/refs/heads/main/metadata/compat.json"
@@ -127,12 +130,12 @@ function dynamic_config() {
         echo "Setting port... $PORT"
 
         jq --arg port "$PORT" \
-            '.settings.port = $port' \
+            '.settings.port = ($port|tonumber)' \
             "$CONFIG_FILE" > temp_config.json && mv temp_config.json "$CONFIG_FILE"
     else
         echo "Invalid or no port, defaulting to '443', Value(s) given: ${PORT:-empty}"
         jq --arg port "443" \
-            '.settings.port = $port' \
+            '.settings.port = ($port|tonumber)' \
             "$CONFIG_FILE" > temp_config.json && mv temp_config.json "$CONFIG_FILE"
     fi
 
@@ -141,12 +144,12 @@ function dynamic_config() {
         echo "Setting redirport... $REDIR_PORT"
 
         jq --arg redirport "$REDIR_PORT" \
-            '.settings.redirPort = $redirport' \
+            '.settings.redirPort = ($redirport|tonumber)' \
             "$CONFIG_FILE" > temp_config.json && mv temp_config.json "$CONFIG_FILE"
     else
         echo "Invalid or no redirport, defaulting to '80', Value(s) given: ${REDIR_PORT:-empty}"
         jq --arg redirport "80" \
-            '.settings.redirPort = $redirport' \
+            '.settings.redirPort = ($redirport|tonumber)' \
             "$CONFIG_FILE" > temp_config.json && mv temp_config.json "$CONFIG_FILE"
     fi
 
@@ -316,10 +319,14 @@ function install_stylishui() {
         # Retrieve the values we need to determine compatibility
         compat_data=$(curl -fsSL "$stylishui_compat")
         meshcentral_version=$(jq -r '.version' /opt/meshcentral/meshcentral/package.json)
-        # Target the StylishUI version we need for our present Meshcentral version
+        # Target the StylishUI version we need for our present Meshcentral version, the first match is the newest one
         compat_version=$(echo "$compat_data" | jq -r --arg mcv "$meshcentral_version" \
-            '.compatibility[] | select(.meshcentral==$mcv) | .stylishui')
+            'first(.compatibility[] | select(.meshcentral==$mcv)) | .stylishui')
         echo "Data: MeshCentral: $meshcentral_version, matched StylishUI: $compat_version"
+        if [[ -z "$compat_version" ]]; then
+            echo "No StylishUI version is listed as compatible with MeshCentral $meshcentral_version, set STYLISHUI_FORCE_LATEST=true to install the latest one."
+            return 1
+        fi
 
         # From the data gathered above, compile the whole URL.
         full_url="${stylishui_base_url}/tags/${compat_version}.tar.gz"
@@ -408,7 +415,7 @@ if [[ ${INSTALL_STYLISHUI,,} =~ ^(true|yes)$ ]]; then
 fi
 
 # Actually start MeshCentral.
-node /opt/meshcentral/meshcentral/meshcentral --configfile "${CONFIG_FILE}" "${ARGS}" >> /proc/1/fd/1 &
+node /opt/meshcentral/meshcentral/meshcentral --configfile "${CONFIG_FILE}" "${ARGS}" &
 meshcentral_pid=$!
 
 wait "$meshcentral_pid"

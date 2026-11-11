@@ -23,6 +23,94 @@ function SerialTunnel(options) {
     return obj;
 }
 
+// Append an exact IP address to an agent block list file.
+function AppendAgentBlockedIp(filename, ip, fsModule) {
+    if ((typeof filename != 'string') || (filename.length == 0) || (typeof ip != 'string') || (ip.length == 0)) { return false; }
+    try {
+        const separator = (fsModule.existsSync(filename) && (fsModule.statSync(filename).size > 0)) ? '\r\n' : '';
+        fsModule.appendFileSync(filename, separator + ip + '\r\n');
+        return true;
+    } catch (ex) { return false; }
+}
+
+// Create a sliding-window limiter for new agent registrations by source IP.
+function CreateAgentRegistrationLimiter(config, nowFunc, ipMatchFunc, onBlockFunc) {
+    if ((config == null) || (typeof config != 'object') || Array.isArray(config)) { return null; }
+    if (!Number.isSafeInteger(config.agents) || (config.agents < 1)) { return null; }
+    if (!Number.isSafeInteger(config.minutes) || (config.minutes < 1)) { return null; }
+
+    const obj = {};
+    const windowMilliseconds = config.minutes * 60000;
+    const autoBlock = (config.autoblock !== false);
+    const registrations = Object.create(null);
+    const now = (typeof nowFunc == 'function') ? nowFunc : Date.now;
+    var operationsSinceClean = 0;
+    var exclusions = [];
+
+    if (typeof config.exclude == 'string') {
+        exclusions = config.exclude.split(',').map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
+    } else if (Array.isArray(config.exclude)) {
+        exclusions = config.exclude.filter(function (x) { return typeof x == 'string'; }).map(function (x) { return x.trim(); }).filter(function (x) { return x.length > 0; });
+    }
+
+    function normalizeIp(ip) {
+        if ((typeof ip != 'string') || (ip.length == 0) || (ip.length > 128)) { return null; }
+        ip = ip.toLowerCase();
+        if (ip.indexOf('::ffff:') == 0) { ip = ip.substring(7); }
+        if (require('net').isIP(ip) == 0) { return null; }
+        return ip;
+    }
+
+    function isExcluded(ip) {
+        if (exclusions.length == 0) { return false; }
+        const ipMatch = (typeof ipMatchFunc == 'function') ? ipMatchFunc : require('ipcheck').match;
+        for (var i = 0; i < exclusions.length; i++) {
+            try { if (ipMatch(ip, exclusions[i]) == true) { return true; } } catch (ex) { }
+        }
+        return false;
+    }
+
+    function prune(ip, currentTime) {
+        const timestamps = registrations[ip];
+        if (timestamps == null) { return null; }
+        const cutoffTime = currentTime - windowMilliseconds;
+        while ((timestamps.length > 0) && (timestamps[0] <= cutoffTime)) { timestamps.shift(); }
+        if (timestamps.length == 0) { delete registrations[ip]; return null; }
+        return timestamps;
+    }
+
+    obj.clean = function () {
+        const currentTime = now();
+        for (var ip in registrations) { prune(ip, currentTime); }
+        operationsSinceClean = 0;
+    };
+
+    obj.isBlocked = function (ip) {
+        if (autoBlock == false) { return false; }
+        ip = normalizeIp(ip);
+        if ((ip == null) || isExcluded(ip)) { return false; }
+        const timestamps = prune(ip, now());
+        return (timestamps != null) && (timestamps.length >= config.agents);
+    };
+
+    // Returns false when this registration would exceed the configured limit.
+    obj.register = function (ip) {
+        ip = normalizeIp(ip);
+        if (ip == null) { return false; }
+        if (isExcluded(ip)) { return true; }
+        const currentTime = now();
+        var timestamps = prune(ip, currentTime);
+        if ((timestamps != null) && (timestamps.length >= config.agents)) { return false; }
+        if (timestamps == null) { timestamps = registrations[ip] = []; }
+        timestamps.push(currentTime);
+        if ((autoBlock == true) && (timestamps.length == config.agents) && (typeof onBlockFunc == 'function')) { try { onBlockFunc(ip); } catch (ex) { } }
+        if (++operationsSinceClean > 100) { obj.clean(); }
+        return true;
+    };
+
+    return obj;
+}
+
 // ExpressJS login sample
 // https://github.com/expressjs/express/blob/master/examples/auth/index.js
 
@@ -82,6 +170,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
     obj.tcpServer = null;
     obj.certificates = certificates;
     obj.users = {};                             // UserID --> User
+    obj.oidcLogoutUrls = {};                    // UserID --> OIDC end session URL from the last login
     obj.meshes = {};                            // MeshID --> Mesh (also called device group)
     obj.userGroups = {};                        // UGrpID --> User Group
     obj.useNodeDefaultTLSCiphers = args.usenodedefaulttlsciphers; // Use TLS ciphers provided by node
@@ -95,6 +184,20 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
     obj.relaySessionErrorCount = 0;
     obj.blockedUsers = 0;
     obj.blockedAgents = 0;
+    obj.persistAgentBlockedIp = function (ip) {
+        if (parent.agentBlockedIpFile == null) { return false; }
+        if (AppendAgentBlockedIp(parent.agentBlockedIpFile, ip, obj.fs) == false) {
+            console.log('Unable to permanently block agent IP address ' + ip + ' in ' + parent.agentBlockedIpFile + '; temporary block remains active.');
+            return false;
+        }
+        if (!Array.isArray(parent.config.settings.agentblockedip)) { parent.config.settings.agentblockedip = []; }
+        if (parent.config.settings.agentblockedip.indexOf(ip) < 0) { parent.config.settings.agentblockedip.push(ip); }
+        obj.agentBlockedIp = parent.config.settings.agentblockedip;
+        parent.debug('agent', 'Permanently blocked agent IP address ' + ip + ' in ' + parent.agentBlockedIpFile + '.');
+        return true;
+    };
+    obj.agentRegistrationLimiter = CreateAgentRegistrationLimiter(parent.config.settings.agentenrollmentratelimitbyip, null, null, obj.persistAgentBlockedIp);
+    obj.recordAgentRegistration = function (ip) { return (obj.agentRegistrationLimiter == null) || obj.agentRegistrationLimiter.register(ip); };
     obj.renderPages = null;
     obj.renderLanguages = [];
     obj.destroyedSessions = {};                 // userid/req.session.x --> destroyed session time
@@ -167,6 +270,10 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
     const MESHRIGHT_REMOTECOMMAND = 0x00020000;
     const MESHRIGHT_RESETOFF = 0x00040000;
     const MESHRIGHT_GUESTSHARING = 0x00080000;
+    const MESHRIGHT_DEVICEDETAILS = 0x00100000;
+    const MESHRIGHT_RELAY = 0x00200000;
+    const MESHRIGHT_NOREGISTRY = 0x00400000;
+    const MESHRIGHT_NOSOFTWARE = 0x00800000;
     const MESHRIGHT_ADMIN = 0xFFFFFFFF;
 
     // Site rights
@@ -437,7 +544,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         duplicateAgentCount: 0,
         maxDomainDevicesReached: 0,
         agentInTrouble: 0,
-        agentInBigTrouble: 0
+        agentInBigTrouble: 0,
+        agentRegistrationBlockCount: 0
     }
     obj.getAgentStats = function () { return obj.agentStats; }
 
@@ -481,7 +589,21 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
 
     // Keep a record of the last agent issues.
     obj.getAgentIssues = function () { return obj.agentIssues; }
-    obj.setAgentIssue = function (agent, issue) { obj.agentIssues.push([new Date().toLocaleString(), agent.remoteaddrport, issue]); while (obj.setAgentIssue.length > 50) { obj.agentIssues.shift(); } }
+    obj.setAgentIssue = function (agent, issue) {
+        var addrport = agent.issueRemoteAddrPort || agent.remoteaddrport || '';
+
+		if (!addrport) {
+			var addr = agent.issueRemoteAddr || agent.remoteaddr || '';
+
+			if (!addr && agent.ws && agent.ws._socket && agent.ws._socket.remoteAddress) {
+				addr = agent.ws._socket.remoteAddress;
+			}
+
+			addrport = addr;
+		}
+        obj.agentIssues.push([new Date().toLocaleString(), addrport, issue]);
+        while (obj.agentIssues.length > 50) { obj.agentIssues.shift(); }
+    }
     obj.agentIssues = [];
 
     // Authenticate the user
@@ -855,17 +977,43 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
     function checkAgentIpAddress(req, res) {
         if ((parent.config.settings.agentblockedip != null) && (checkIpAddressEx(req, res, parent.config.settings.agentblockedip, null) == true)) { obj.blockedAgents++; return null; }
         if ((parent.config.settings.agentallowedip != null) && (checkIpAddressEx(req, res, parent.config.settings.agentallowedip, null) == false)) { obj.blockedAgents++; return null; }
+        const clientIp = (req.clientIp != null) ? req.clientIp : res.clientIp;
+        if ((obj.agentRegistrationLimiter != null) && obj.agentRegistrationLimiter.isBlocked(clientIp)) {
+            obj.blockedAgents++;
+            obj.agentStats.agentRegistrationBlockCount++;
+            parent.debug('agent', 'Agent connection from ' + clientIp + ' blocked by new registration limit.');
+            return null;
+        }
         const domain = (req.url ? getDomain(req) : getDomain(res));
         if ((domain.agentblockedip != null) && (checkIpAddressEx(req, res, domain.agentblockedip, null) == true)) { obj.blockedAgents++; return null; }
         if ((domain.agentallowedip != null) && (checkIpAddressEx(req, res, domain.agentallowedip, null) == false)) { obj.blockedAgents++; return null; }
         return domain;
     }
 
+    // True when the address is IPv4/IPv6 loopback (not a general private-network address)
+    function isLoopbackAddress(addr) {
+        if (typeof addr != 'string') { return false; }
+        if (addr.indexOf('::ffff:') == 0) { addr = addr.substring(7); }
+        if ((addr == '127.0.0.1') || (addr == '::1') || (addr == 'localhost')) { return true; }
+        return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(addr);
+    }
+
+    // Domainid URL selection is only for real local connections, not a Host: localhost header alone
+    function isLocalhostDomainSelect(req) {
+        if ((req == null) || (req.hostname != 'localhost') || (req.query == null) || (req.query.domainid == null)) { return false; }
+        if (isLoopbackAddress(req.clientIp) == false) { return false; }
+        var peer = null;
+        if ((req.connection != null) && (typeof req.connection.remoteAddress == 'string')) { peer = req.connection.remoteAddress; }
+        else if ((req.socket != null) && (typeof req.socket.remoteAddress == 'string')) { peer = req.socket.remoteAddress; }
+        if ((peer != null) && (isLoopbackAddress(peer) == false)) { return false; }
+        return true;
+    }
+
     // Return the current domain of the request
     // Request or connection says open regardless of the response
     function getDomain(req) {
         if (req.xdomain != null) { return req.xdomain; } // Domain already set for this request, return it.
-        if ((req.hostname == 'localhost') && (req.query.domainid != null)) { const d = parent.config.domains[req.query.domainid]; if (d != null) return d; } // This is a localhost access with the domainid specified in the URL
+        if (isLocalhostDomainSelect(req)) { const d = parent.config.domains[req.query.domainid]; if (d != null) return d; } // Local access with the domainid specified in the URL
         if (req.hostname != null) { const d = obj.dnsDomains[req.hostname.toLowerCase()]; if (d != null) return d; } // If this is a DNS name domain, return it here.
         const x = req.url.split('/');
         if (x.length < 2) return parent.config.domains[''];
@@ -899,6 +1047,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         res.set({ 'Cache-Control': 'no-store' });
         // Destroy the user's session to log them out will be re-created next request
         var userid = req.session.userid;
+        var oidcLogoutUrl = null;
+        if (userid != null) { oidcLogoutUrl = obj.oidcLogoutUrls[userid]; delete obj.oidcLogoutUrls[userid]; }
         if (req.session.userid) {
             var user = obj.users[req.session.userid];
             if (user != null) {
@@ -918,6 +1068,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             if (userStrategy == 'oidc' && domain.authstrategies.oidc != null) {
                 if (typeof domain.authstrategies.oidc.logouturl == 'string') {
                     logouturl = domain.authstrategies.oidc.logouturl;
+                } else if (typeof oidcLogoutUrl == 'string') {
+                    logouturl = oidcLogoutUrl;
                 } else if (typeof domain.authstrategies.oidc.issuer.end_session_endpoint == 'string' && typeof domain.authstrategies.oidc.client.post_logout_redirect_uri == 'string') {
                     logouturl = domain.authstrategies.oidc.issuer.end_session_endpoint + (domain.authstrategies.oidc.issuer.end_session_endpoint.indexOf('?') == -1 ? '?' : '&') + 'post_logout_redirect_uri=' + domain.authstrategies.oidc.client.post_logout_redirect_uri;
                 } else if (typeof domain.authstrategies.oidc.issuer.end_session_endpoint == 'string') {
@@ -927,7 +1079,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             } else if ((domain.authstrategies[userStrategy] != null) && (typeof domain.authstrategies[userStrategy].logouturl == 'string')) { logouturl = domain.authstrategies[userStrategy].logouturl; }
             // If custom logout was setup, use it
             if (logouturl != null) {
-                parent.authLog('handleLogoutRequest', userStrategy.toUpperCase() + ': LOGOUT: ' + logouturl);
+                parent.authLog('handleLogoutRequest', userStrategy.toUpperCase() + ': LOGOUT');
                 res.redirect(logouturl);
                 return;
             }
@@ -954,7 +1106,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             const cookies = req.headers.cookie.split('; ');
             for (var i in cookies) {
                 if (cookies[i].startsWith('twofactor=')) {
-                    var twoFactorCookie = obj.parent.decodeCookie(decodeURIComponent(cookies[i].substring(10)), obj.parent.loginCookieEncryptionKey, (30 * 24 * 60)); // If the cookies does not have an expire field, assume 30 day timeout.
+                    var twoFactorCookie = null;
+                    try { twoFactorCookie = obj.parent.decodeCookie(decodeURIComponent(cookies[i].substring(10)), obj.parent.loginCookieEncryptionKey, (30 * 24 * 60)); } catch (ex) { }
                     if ((twoFactorCookie != null) && ((twoFactorCookie.ip == null) || checkCookieIp(twoFactorCookie.ip, req.clientIp)) && (twoFactorCookie.userid == user._id)) { return { twoFactorType: 'cookie' }; }
                 }
             }
@@ -978,11 +1131,20 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             const cookies = req.headers.cookie.split('; ');
             for (var i in cookies) {
                 if (cookies[i].startsWith('twofactor=')) {
-                    var twoFactorCookie = obj.parent.decodeCookie(decodeURIComponent(cookies[i].substring(10)), obj.parent.loginCookieEncryptionKey, (30 * 24 * 60)); // If the cookies does not have an expire field, assume 30 day timeout.
+                    var twoFactorCookie = null;
+                    try { twoFactorCookie = obj.parent.decodeCookie(decodeURIComponent(cookies[i].substring(10)), obj.parent.loginCookieEncryptionKey, (30 * 24 * 60)); } catch (ex) { }
                     if ((twoFactorCookie != null) && ((twoFactorCookie.ip == null) || checkCookieIp(twoFactorCookie.ip, req.clientIp)) && (twoFactorCookie.userid == user._id)) { return false; }
                 }
             }
         }
+
+        // Check if a 2nd factor is present
+        return userHasSecondFactor(domain, user);
+    }
+
+    // Return true if this user has at least one second factor set up
+    function userHasSecondFactor(domain, user) {
+        if (parent.config.settings.no2factorauth === true) return false;
 
         // See if SMS 2FA is available
         var sms2fa = (((typeof domain.passwordrequirements != 'object') || (domain.passwordrequirements.sms2factor != false)) && (parent.smsserver != null) && (user.phone != null));
@@ -990,8 +1152,19 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         // See if Messenger 2FA is available
         var msg2fa = (((typeof domain.passwordrequirements != 'object') || (domain.passwordrequirements.msg2factor != false)) && (parent.msgserver != null) && (parent.msgserver.providers != 0) && (user.msghandle != null));
 
-        // Check if a 2nd factor is present
-        return ((parent.config.settings.no2factorauth !== true) && (msg2fa || sms2fa || (user.otpsecret != null) || ((user.email != null) && (user.emailVerified == true) && (domain.mailserver != null) && (user.otpekey != null)) || (user.otpduo != null) || ((user.otphkeys != null) && (user.otphkeys.length > 0))));
+        return (msg2fa || sms2fa || (user.otpsecret != null) || ((user.email != null) && (user.emailVerified == true) && (domain.mailserver != null) && (user.otpekey != null)) || (user.otpduo != null) || ((user.otphkeys != null) && (user.otphkeys.length > 0)));
+    }
+
+    // Return true when force2factor applies to this user and no second factor is set up yet.
+    // Same conditions as the 0x00040000 feature flag, so the server enforces what the web pages show.
+    obj.force2factorPending = function (domain, user, req) {
+        if ((user == null) || (obj.args.nousers == true) || (parent.config.settings.no2factorauth === true) || (domain.auth == 'sspi')) return false;
+        if ((domain.passwordrequirements == null) || (domain.passwordrequirements.force2factor !== true) || (user._id.split('/')[2][0] == '~')) return false;
+        if (obj.parent.certificates.CommonName.indexOf('.') == -1) return false; // 2FA can't be set up without a server name
+        if ((req != null) && (req.clientIp != null) && (domain.passwordrequirements.skip2factor != null)) {
+            for (var i in domain.passwordrequirements.skip2factor) { if (require('ipcheck').match(req.clientIp, domain.passwordrequirements.skip2factor[i]) === true) return false; }
+        }
+        return (userHasSecondFactor(domain, user) == false);
     }
 
     // Check the 2-step auth token
@@ -999,6 +1172,13 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         parent.debug('web', 'checkUserOneTimePassword()');
         const twoStepLoginSupported = ((domain.auth != 'sspi') && (obj.parent.certificates.CommonName.indexOf('.') != -1) && (obj.args.nousers !== true) && (parent.config.settings.no2factorauth !== true));
         if (twoStepLoginSupported == false) { parent.debug('web', 'checkUserOneTimePassword: not supported.'); func(true); return; };
+        if (obj.checkAllow2Fa(req) == false) { func(false); return; }
+        if (typeof token != 'string') { token = null; } // A repeated form field arrives as an array
+        if (typeof hwtoken != 'string') { hwtoken = null; }
+
+        // Count bad tokens here so the websocket logins share the limit with the login page. Asking for a code to be sent is not an attempt.
+        const func2 = func, attempted = (((token != null) && (token != '') && (['**email**', '**sms**', '**msg**'].indexOf(token) == -1)) || ((hwtoken != null) && (hwtoken != '') && (['**sms**', '**msg**'].indexOf(hwtoken) == -1)));
+        func = function (result, authData) { if ((result !== true) && attempted) { obj.setbad2Fa(req); } func2(result, authData); }
 
         // Check if we can use OTP tokens with email
         var otpemail = (domain.mailserver != null);
@@ -1010,7 +1190,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
 
         // Check 2FA login cookie
         if ((token != null) && (token.startsWith('cookie='))) {
-            var twoFactorCookie = obj.parent.decodeCookie(decodeURIComponent(token.substring(7)), obj.parent.loginCookieEncryptionKey, (30 * 24 * 60)); // If the cookies does not have an expire field, assume 30 day timeout.
+            var twoFactorCookie = null;
+            try { twoFactorCookie = obj.parent.decodeCookie(decodeURIComponent(token.substring(7)), obj.parent.loginCookieEncryptionKey, (30 * 24 * 60)); } catch (ex) { }
             if ((twoFactorCookie != null) && ((twoFactorCookie.ip == null) || checkCookieIp(twoFactorCookie.ip, req.clientIp)) && (twoFactorCookie.userid == user._id)) { func(true, { twoFactorType: 'cookie' }); return; }
         }
 
@@ -1054,7 +1235,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         if (user.otphkeys && (user.otphkeys.length > 0) && (typeof (hwtoken) == 'string') && (hwtoken.length > 0)) {
             var authResponse = null;
             try { authResponse = JSON.parse(hwtoken); } catch (ex) { }
-            if ((authResponse != null) && (authResponse.clientDataJSON)) {
+            if ((authResponse != null) && (typeof authResponse.id == 'string') && (typeof authResponse.authenticatorData == 'string') && (typeof authResponse.clientDataJSON == 'string') && (typeof authResponse.signature == 'string') && (typeof authResponse.userHandle == 'string')) {
                 // Get all WebAuthn keys
                 var webAuthnKeys = [];
                 for (var i = 0; i < user.otphkeys.length; i++) { if (user.otphkeys[i].type == 3) { webAuthnKeys.push(user.otphkeys[i]); } }
@@ -1110,12 +1291,24 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         }
 
         // Check Google Authenticator
-        const otplib = require('otplib')
-        otplib.authenticator.options = { window: 2 }; // Set +/- 1 minute window
-        if (user.otpsecret && (typeof (token) == 'string') && (token.length == 6) && (otplib.authenticator.check(token, user.otpsecret) == true)) {
-            parent.debug('web', 'checkUserOneTimePassword: success (authenticator).');
-            func(true, { twoFactorType: 'otp' });
-            return;
+        if (user.otpsecret && (typeof (token) == 'string') && (token.length == 6)){
+            const otplib = require('otplib');
+            var verified = null;
+            try {
+                verified = otplib.verifySync({ 
+                    epochTolerance: 60, 
+                    token: token, 
+                    secret: user.otpsecret,
+                    guardrails: otplib.createGuardrails({
+                        MIN_SECRET_BYTES: 10, // https://github.com/yeojz/otplib/issues/671#issuecomment-4368647105
+                    })
+                });
+            } catch (ex) { parent.debug('web', 'checkUserOneTimePassword: exception ' + ex); }
+            if ((verified != null) && (verified.valid === true)) {
+                parent.debug('web', 'checkUserOneTimePassword: success (authenticator).');
+                func(true, { twoFactorType: 'otp' });
+                return;
+            }
         };
 
         // Check written down keys
@@ -1124,7 +1317,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             for (var i = 0; i < user.otpkeys.keys.length; i++) {
                 if ((tokenNumber === user.otpkeys.keys[i].p) && (user.otpkeys.keys[i].u === true)) {
                     parent.debug('web', 'checkUserOneTimePassword: success (one-time).');
-                    user.otpkeys.keys[i].u = false; func(true, { twoFactorType: 'backup' }); return;
+                    user.otpkeys.keys[i].u = false; obj.db.SetUser(user); func(true, { twoFactorType: 'backup' }); return;
                 }
             }
         }
@@ -1202,8 +1395,10 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         if (req.body == null) { res.sendStatus(404); return; } // Post body is empty or can't be parsed
         if (req.session == null) { req.session = {}; }
 
+        const blockingMode = parent.config.settings.maxinvalidlogin?.blocking || 'iprange';
+
         // Check if this is a banned ip address
-        if (obj.checkAllowLogin(req) == false) {
+        if (blockingMode !== 'username' && obj.checkAllowLogin(req) === false) {
             // Wait and redirect the user
             setTimeout(function () {
                 req.session.messageid = 114; // IP address blocked, try again later.
@@ -1217,6 +1412,16 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         if ((xusername == null) && (xpassword == null) && (req.body.token != null)) {
             const sec = parent.decryptSessionData(req.session.e);
             xusername = sec.tuser; xpassword = sec.tpass;
+        }
+
+        // Check if the user is locked out
+        if (blockingMode === 'username' && obj.checkAllowLogin(null, xusername) === false) {
+            // Wait and redirect the user
+            setTimeout(function () {
+                req.session.messageid = 110; // Account locked
+                if (direct === true) { handleRootRequestEx(req, res, domain); } else { res.redirect(domain.url + getQueryPortion(req)); }
+            }, 2000 + (obj.crypto.randomBytes(2).readUInt16BE(0) % 4095));
+            return;
         }
 
         // Authenticate the user
@@ -1355,7 +1560,6 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                                 parent.debug('web', 'handleLoginRequest: invalid 2FA token');
                                 const ua = obj.getUserAgentInfo(req);
                                 obj.parent.DispatchEvent(['*', 'server-users', user._id], obj, { action: 'authfail', username: user.name, userid: user._id, domain: domain.id, msg: 'User login attempt with incorrect 2nd factor from ' + req.clientIp, msgid: 108, msgArgs: [req.clientIp, ua.browserStr, ua.osStr] });
-                                obj.setbad2Fa(req);
                             } else {
                                 parent.debug('web', 'handleLoginRequest: 2FA token required');
                             }
@@ -1363,11 +1567,11 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                             // Wait and redirect the user
                             setTimeout(function () {
                                 req.session.loginmode = 4;
-                                if ((user.email != null) && (user.emailVerified == true) && (domain.mailserver != null) && (user.otpekey != null)) { req.session.temail = 1; }
-                                if ((user.phone != null) && (parent.smsserver != null)) { req.session.tsms = 1; }
-                                if ((user.msghandle != null) && (parent.msgserver != null) && (parent.msgserver.providers != 0)) { req.session.tmsg = 1; }
-                                if ((user.otpdev != null) && (parent.firebase != null)) { req.session.tpush = 1; }
-                                if ((user.otpduo != null)) { req.session.tduo = 1; }
+                                if ((user.email != null) && (user.emailVerified == true) && (domain.mailserver != null) && (user.otpekey != null)) { req.session.temail = 1; } else { delete req.session.temail; }
+                                if ((user.phone != null) && (parent.smsserver != null)) { req.session.tsms = 1; } else { delete req.session.tsms; }
+                                if ((user.msghandle != null) && (parent.msgserver != null) && (parent.msgserver.providers != 0)) { req.session.tmsg = 1; } else { delete req.session.tmsg; }
+                                if ((user.otpdev != null) && (parent.firebase != null)) { req.session.tpush = 1; } else { delete req.session.tpush; }
+                                if ((user.otpduo != null)) { req.session.tduo = 1; } else { delete req.session.tduo; }
                                 req.session.e = parent.encryptSessionData({ tuserid: userid, tuser: xusername, tpass: xpassword });
                                 if (direct === true) { handleRootRequestEx(req, res, domain); } else { res.redirect(domain.url + getQueryPortion(req)); }
                             }, randomWaitTime);
@@ -1431,19 +1635,19 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                             req.session.messageid = 110; // Account locked.
                             const ua = obj.getUserAgentInfo(req);
                             obj.parent.DispatchEvent(['*', 'server-users', xuserid], obj, { action: 'authfail', userid: xuserid, username: xusername, domain: domain.id, msg: 'User login attempt on locked account from ' + req.clientIp, msgid: 109, msgArgs: [req.clientIp, ua.browserStr, ua.osStr] });
-                            obj.setbadLogin(req);
+                            obj.setbadLogin(req, xusername);
                         } else if (err == 'denied') {
                             parent.debug('web', 'handleLoginRequest: login failed, access denied');
                             req.session.messageid = 111; // Access denied.
                             const ua = obj.getUserAgentInfo(req);
                             obj.parent.DispatchEvent(['*', 'server-users', xuserid], obj, { action: 'authfail', userid: xuserid, username: xusername, domain: domain.id, msg: 'Denied user login from ' + req.clientIp, msgid: 155, msgArgs: [req.clientIp, ua.browserStr, ua.osStr] });
-                            obj.setbadLogin(req);
+                            obj.setbadLogin(req, xusername);
                         } else {
                             parent.debug('web', 'handleLoginRequest: login failed, bad username and password');
                             req.session.messageid = 112; // Login failed, check username and password.
                             const ua = obj.getUserAgentInfo(req);
                             obj.parent.DispatchEvent(['*', 'server-users', xuserid], obj, { action: 'authfail', userid: xuserid, username: xusername, domain: domain.id, msg: 'Invalid user login attempt from ' + req.clientIp, msgid: 110, msgArgs: [req.clientIp, ua.browserStr, ua.osStr] });
-                            obj.setbadLogin(req);
+                            obj.setbadLogin(req, xusername);
                         }
                     }
 
@@ -1883,7 +2087,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                     // If many accounts have the same validated e-mail, we are going to use the first one for display, but sent a reset email for all accounts.
                     var responseSent = false;
                     for (var i in docs) {
-                        var user = docs[i];
+                        var user = obj.users[docs[i]._id] || docs[i]; // Use the cached user, the login path checks that copy for used codes
                         if (checkUserOneTimePasswordRequired(domain, user, req) == true) {
                             // Second factor setup, request it now.
                             checkUserOneTimePassword(req, domain, user, req.body.token, req.body.hwtoken, function (result, authData) {
@@ -1923,7 +2127,6 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                                                 req.session.messageid = 108; // Invalid token, try again.
                                                 const ua = obj.getUserAgentInfo(req);
                                                 obj.parent.DispatchEvent(['*', 'server-users', user._id], obj, { action: 'authfail', username: user.name, userid: user._id, domain: domain.id, msg: 'User login attempt with incorrect 2nd factor from ' + req.clientIp, msgid: 108, msgArgs: [req.clientIp, ua.browserStr, ua.osStr] });
-                                                obj.setbad2Fa(req);
                                             }
                                         }
                                         req.session.loginmode = 5;
@@ -2173,6 +2376,9 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         if ((domain.loginkey != null) && (domain.loginkey.indexOf(req.query.key) == -1)) { res.sendStatus(404); return; } // Check 3FA URL key
         if ((req.body == null) || (req.body.inviteCode == null) || (req.body.inviteCode == '')) { render(req, res, getRenderPage('invite', req, domain), getRenderArgs({ messageid: 0 }, req, domain)); return; } // No invitation code
 
+        // Invite codes are short, so a wrong one counts like a failed login and a blocked address only gets the bad code page
+        if (obj.checkAllowLogin(req) === false) { render(req, res, getRenderPage('invite', req, domain), getRenderArgs({ messageid: 100 }, req, domain)); return; }
+
         // Each for a device group that has this invite code.
         for (var i in obj.meshes) {
             if ((obj.meshes[i].domain == domain.id) && (obj.meshes[i].deleted == null) && (obj.meshes[i].invite != null) && (obj.meshes[i].invite.codes.indexOf(req.body.inviteCode) >= 0)) {
@@ -2182,6 +2388,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             }
         }
 
+        obj.setbadLogin(req);
         render(req, res, getRenderPage('invite', req, domain), getRenderArgs({ messageid: 100 }, req, domain)); // Bad invitation code
     }
 
@@ -2218,6 +2425,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
 
         // No user login, exit now
         if (user == null) { res.sendStatus(401); return; }
+        if (obj.force2factorPending(domain, user, req)) { res.sendStatus(401); return; } // 2FA setup is still required for this account
 
         if (req.query.ws != null) {
             // This is a query with a websocket relay cookie, check that the cookie is valid and use it.
@@ -2406,7 +2614,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         var imageUserId = req.session.userid;
         if ((req.query.id != null)) {
             var user = obj.users[req.session.userid];
-            if ((user == null) || (user.siteadmin == null) && ((user.siteadmin & 2) == 0)) { res.sendStatus(404); return; }
+            if ((user == null) || ((user.siteadmin & SITERIGHT_MANAGEUSERS) == 0)) { res.sendStatus(404); return; }
             imageUserId = 'user/' + domain.id + '/' + req.query.id;
         }
         obj.db.Get('im' + imageUserId, function (err, docs) {
@@ -2693,7 +2901,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         if ((req.user != null) && (req.user.sid != null) && (req.user.strategy != null)) {
             const strategy = domain.authstrategies[req.user.strategy];
             const groups = { 'enabled': typeof strategy.groups == 'object' }
-            parent.authLog(req.user.strategy.toUpperCase(), `User Authorized: ${JSON.stringify(req.user)}`);
+            parent.authLog(req.user.strategy.toUpperCase(), `User Authorized: ${req.user.sid}`);
             if (groups.enabled) { // Groups only available for OIDC strategy currently
                 groups.userMemberships = obj.common.convertStrArray(req.user.groups);
                 groups.syncEnabled = (strategy.groups.sync === true || strategy.groups.sync?.filter) ? true : false;
@@ -2904,6 +3112,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                 obj.parent.DispatchEvent(targets, obj, loginEvent);
                 parent.authLog('handleStrategyLogin', `${req.user.strategy.toUpperCase()}: LOGIN SUCCESS: USER: "${req.user.sid}"`);
             }
+            if (typeof req.user.oidcLogoutUrl == 'string') { obj.oidcLogoutUrls[userid] = req.user.oidcLogoutUrl; } // Carries the id_token hint, keep it out of the session cookie and user record
         } else if (req.session && req.session.userid && obj.users[req.session.userid]) {
             parent.authLog('handleStrategyLogin', `User Already Authorised "${(req.session.passport && req.session.passport.user) ? req.session.passport.user : req.session.userid }"`);
         } else {
@@ -2914,38 +3123,14 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         let url = domain.url;
         if (Object.keys(req.query).length > 0) { url += "?" + Object.keys(req.query).map(function(key) { return encodeURIComponent(key) + "=" + encodeURIComponent(req.query[key]); }).join("&"); }
 
-        // check for relaystate is set, test against configured server name and accepted query params
-        if(req.body && req.body.RelayState !== undefined){
-                var relayState = decodeURIComponent(req.body.RelayState);
-                var serverName = (obj.getWebServerName(domain, req)).replaceAll('.','\\.');
-
-                var regexstr = `(?<=https:\\/\\/(?:.+?\\.)?${serverName}\\/?)` +
-                `.*((?<=([\\?&])gotodevicename=(.{64})|` +
-                `gotonode=(.{64})|` +
-                `gotodeviceip=(((25[0-5]|(2[0-4]|1\\d|[1-9]|)\\d)\\.?\\b){4})|` +
-                `gotodeviceip=(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|::([0-9a-fA-F]{1,4}:){1,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:)` +
-                `lang=(.{5})|` +
-                `sitestyle=(\\d+)|` +
-                `user=(.{64})|` +
-                `pass=(.{256})|` +
-                `key=|` +
-                `locale=|` +
-                `gotomesh=(.{64})|` +
-                `gotouser=(.{0,64})|` +
-                `gotougrp=(.{64})|` +
-                `debug=|` +
-                `filter=|` +
-                `webrtc=|` +
-                `hide=|` +
-                `viewmode=(\\d+)(?=[\\&]|\\b)))`;
-
-                var regex = new RegExp(regexstr);
-                if(regex.test(relayState)){
-                        url = relayState;
-                }
+        // RelayState is echoed back by the IdP, only follow it to this server's own root
+        if ((req.body != null) && (typeof req.body.RelayState == 'string')) {
+            try {
+                const base = new URL(obj.generateBaseURL(domain, req)), target = new URL(decodeURIComponent(req.body.RelayState));
+                if ((target.origin == base.origin) && (target.pathname == base.pathname) && (target.username == '') && (target.password == '')) { url = target.pathname + target.search; }
+            } catch (ex) { }
         }
-
-        res.end('<html><head><meta http-equiv="refresh" content=0;url="' + url + '"></head><body></body></html>');
+        res.end('<html><head><meta http-equiv="refresh" content="0;url=' + EscapeHtml(url) + '"></head><body></body></html>');
     }
 
     // Indicates that any request to "/" should render "default" or "login" depending on login state
@@ -3201,7 +3386,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                 const allFeatures = obj.getDomainUserFeatures(domain, dbGetFunc.user, dbGetFunc.req);
 
                 // Create a authentication cookie
-                const authCookie = obj.parent.encodeCookie({ userid: dbGetFunc.user._id, domainid: domain.id, ip: req.clientIp }, obj.parent.loginCookieEncryptionKey);
+                const authCookie = obj.parent.encodeCookie({ userid: dbGetFunc.user._id, domainid: domain.id, ip: req.clientIp, x: req.session.x }, obj.parent.loginCookieEncryptionKey);
                 const authRelayCookie = obj.parent.encodeCookie({ ruserid: dbGetFunc.user._id, x: req.session.x }, obj.parent.loginCookieEncryptionKey);
 
                 // Send the main web application
@@ -3259,7 +3444,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                     if (domain.myserver.config !== true) { serverFeatures -= 128; } // Disallow server configuration
                 }
                 if (obj.db.databaseType != 1) { // If not using NeDB, we can't backup using the simple system.
-                    if ((serverFeatures & 1) != 0) { serverFeatures -= 1; } // Disallow server backups
+                    // backup function changed to support all types, only NeDB can be restored through the webinterface
+                    // if ((serverFeatures & 1) != 0) { serverFeatures -= 1; } // Disallow server backups
                     if ((serverFeatures & 2) != 0) { serverFeatures -= 2; } // Disallow simple server restore
                 }
 
@@ -3742,7 +3928,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                 if ((domain.ldap == null) && (domain.sspi == null) && (obj.args.user == null) && (obj.args.nousers != true)) { logoutcontrols.logoutUrl = (domain.url + 'logout?' + Math.random() + extras); } // If a default user is in use or no user mode, don't display the logout button
 
                 // Create a authentication cookie
-                const authCookie = obj.parent.encodeCookie({ userid: user._id, domainid: domain.id, ip: req.clientIp }, obj.parent.loginCookieEncryptionKey);
+                const authCookie = obj.parent.encodeCookie({ userid: user._id, domainid: domain.id, ip: req.clientIp, x: req.session.x }, obj.parent.loginCookieEncryptionKey);
                 const authRelayCookie = obj.parent.encodeCookie({ ruserid: user._id, domainid: domain.id }, obj.parent.loginCookieEncryptionKey);
                 var httpsPort = ((obj.args.aliasport == null) ? obj.args.port : obj.args.aliasport); // Use HTTPS alias port is specified
                 render(req, res, getRenderPage('xterm', req, domain), getRenderArgs({ serverDnsName: obj.getWebServerName(domain, req), serverRedirPort: args.redirport, serverPublicPort: httpsPort, authCookie: authCookie, authRelayCookie: authRelayCookie, logoutControls: encodeURIComponent(JSON.stringify(logoutcontrols)).replace(/'/g, '%27'), name: EscapeHtml(node.name) }, req, domain));
@@ -3957,24 +4143,27 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
 
     // Return a customised mainifest.json for PWA
     function handleManifestRequest(req, res){
-        const domain = checkUserIpAddress(req);
+        const domain = checkUserIpAddress(req, res);
         if (domain == null) { parent.debug('web', 'handleManifestRequest: no domain'); res.sendStatus(404); return; }
+        if ((domain.pwa != null) && (domain.pwa.disabled == true)) { parent.debug('web', 'handleManifestRequest: PWA disabled'); res.sendStatus(404); return; }
+        const pwa = (domain.pwa != null) ? domain.pwa : {};
         parent.debug('web', 'handleManifestRequest()');
         var manifest = {
-            "name": (domain.title != null) ? domain.title : 'MeshCentral',
-            "short_name": (domain.title != null) ? domain.title : 'MeshCentral',
+            "name": (pwa.name != null) ? pwa.name : ((domain.title != null) ? domain.title : 'MeshCentral'),
+            "short_name": (pwa.short_name != null) ? pwa.short_name : ((domain.title != null) ? domain.title : 'MeshCentral'),
             "description": "Open source web based, remote computer management.",
             "scope": ".",
             "start_url": "/",
-            "display": "fullscreen",
-            "orientation": "any",
-            "theme_color": "#ffffff",
-            "background_color": "#ffffff",
-            "icons": [{
+            "display": (pwa.display != null) ? pwa.display : "fullscreen",
+            "orientation": (pwa.orientation != null) ? pwa.orientation : "any",
+            "theme_color": (pwa.themecolor != null) ? pwa.themecolor : "#ffffff",
+            "background_color": (pwa.backgroundcolor != null) ? pwa.backgroundcolor : "#ffffff",
+            "icons": (pwa.icons != null) ? pwa.icons : [{
                 "src": "pwalogo.png",
                 "sizes": "512x512",
                 "type": "image/png"
-            }]
+            }],
+            "shortcuts": pwa.shortcuts
         };
         res.json(manifest);
     }
@@ -4000,7 +4189,11 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                 setContentDispositionHeader(res, 'application/octet-stream', filename, null, 'file.bin');
                 try { res.sendFile(obj.path.resolve(__dirname, path)); } catch (e) { res.sendStatus(404); }
             } else {
-                render(req, res, getRenderPage((domain.sitestyle >= 2) ? 'download2' : 'download', req, domain), getRenderArgs({ rootCertLink: getRootCertLink(domain), messageid: 1, fileurl: req.path + '?download=1', filename: filename, filesize: stat.size }, req, domain));
+                // The download page puts the filename inside a JavaScript string (var filename = '...'),
+                // so escape backslashes and single quotes to keep it inside that string.
+                var filenamejs = filename.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                var fileurljs = (req.path + '?download=1').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                render(req, res, getRenderPage((domain.sitestyle >= 2) ? 'download2' : 'download', req, domain), getRenderArgs({ rootCertLink: getRootCertLink(domain), messageid: 1, fileurl: fileurljs, filename: filenamejs, filesize: stat.size }, req, domain));
             }
         } else {
             render(req, res, getRenderPage((domain.sitestyle >= 2) ? 'download2' : 'download', req, domain), getRenderArgs({ rootCertLink: getRootCertLink(domain), messageid: 2 }, req, domain));
@@ -4011,29 +4204,50 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
     function handleDeviceFile(req, res) {
         const domain = getDomain(req, res);
         if (domain == null) { return; }
+        if ((req.method == 'POST') && (req.body != null)) { // The web pages post the download so the cookie stays out of the URL, browser history and proxy logs
+            const fields = ['c', 'm', 'n', 'f'];
+            for (var i in fields) { if (typeof req.body[fields[i]] == 'string') { req.query[fields[i]] = req.body[fields[i]]; } }
+        }
         if ((req.query.c == null) || (req.query.f == null)) { res.sendStatus(404); return; }
 
         // Check the inbound desktop sharing cookie
         var c = obj.parent.decodeCookie(req.query.c, obj.parent.loginCookieEncryptionKey, 60); // 60 minute timeout
         if ((c == null) || (c.domainid !== domain.id)) { res.sendStatus(404); return; }
+        if (checkAuthCookie(c, req) == false) { res.sendStatus(404); return; } // Check the IP and session binding
 
         // Check userid
         const user = obj.users[c.userid];
-        if ((c == user)) { res.sendStatus(404); return; }
+        if (user == null) { res.sendStatus(404); return; }
+        if (obj.force2factorPending(domain, user, req)) { res.sendStatus(404); return; } // 2FA setup is still required for this account
+
+        if ((c.p != null) && (!Number.isInteger(c.p) || ((c.p & 4) == 0))) { res.sendStatus(404); return; }
+        if ((typeof c.expire == 'number') && (c.expire <= Date.now())) { res.sendStatus(404); return; }
 
         // If this cookie has restricted usages, check that it's allowed to perform downloads
         if (Array.isArray(c.usages) && (c.usages.indexOf(10) < 0)) { res.sendStatus(404); return; } // Check protocol #10
 
-        if (c.nid != null) { req.query.n = c.nid.split('/')[2]; } // This cookie is restricted to a specific nodeid.
+        if (c.nid != null) {
+            if ((typeof c.nid != 'string') || (c.nid.split('/').length != 3) || !c.nid.startsWith('node/' + domain.id + '/')) { res.sendStatus(404); return; }
+            req.query.n = c.nid.split('/')[2];
+        }
         if (req.query.n == null) { res.sendStatus(404); return; }
 
         // Check if this user has permission to manage this computer
         obj.GetNodeWithRights(domain, user, 'node/' + domain.id + '/' + req.query.n, function (node, rights, visible) {
             if ((node == null) || ((rights & MESHRIGHT_REMOTECONTROL) == 0) || (visible == false)) { res.sendStatus(404); return; } // We don't have remote control rights to this device
+            if ((rights != MESHRIGHT_ADMIN) && ((rights & MESHRIGHT_NOFILES) != 0)) { res.sendStatus(404); return; } // This user is not allowed to use files on this device
 
-            // All good, start the file transfer
-            req.query.id = getRandomLowerCase(12);
-            obj.meshDeviceFileHandler.CreateMeshDeviceFile(obj, null, res, req, domain, user, node.meshid, node._id);
+            if (c.pid != null) {
+                obj.db.GetAllTypeNodeFiltered([node._id], domain.id, 'deviceshare', null, function (err, docs) {
+                    if ((err != null) || !Array.isArray(docs) || !docs.some(function (share) { return (share.publicid === c.pid) && ((share.extrakey == null) || (share.extrakey === c.k)); })) { res.sendStatus(404); return; }
+                    startTransfer();
+                });
+            } else { startTransfer(); }
+
+            function startTransfer() {
+                req.query.id = getRandomLowerCase(12);
+                obj.meshDeviceFileHandler.CreateMeshDeviceFile(obj, null, res, req, domain, user, node.meshid, node._id, c);
+            }
         });
     }
 
@@ -4267,6 +4481,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         const user = obj.users[authUserid];
         if (user == null) { res.sendStatus(401); return; }
         if ((user.siteadmin & 512) == 0) { res.sendStatus(401); return; } // Check if we have right to get recordings
+        if (obj.force2factorPending(domain, user, req)) { res.sendStatus(401); return; } // 2FA setup is still required for this account
 
         // Send the recorded file
         setContentDispositionHeader(res, 'application/octet-stream', req.query.file, null, 'recording.mcrec');
@@ -4309,10 +4524,13 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                             if ((command == null) || (typeof command.action != 'string')) return;
                             switch (command.action) {
                                 case 'get': {
-                                    const buffer = Buffer.alloc(8 + command.size);
-                                    //buffer.writeUInt32BE((command.ptr >> 32), 0);
-                                    buffer.writeUInt32BE((command.ptr & 0xFFFFFFFF), 4);
-                                    obj.fs.read(fd, buffer, 8, command.size, command.ptr, function (err, bytesRead, buffer) { if (bytesRead > (buffer.length - 8)) { buffer = buffer.slice(0, bytesRead + 8); } ws.send(buffer); });
+                                    if (!Number.isInteger(command.size) || !Number.isInteger(command.ptr) || (command.size < 0) || (command.size > 1048576) || (command.ptr < 0)) break;
+                                    try {
+                                        const buffer = Buffer.alloc(8 + command.size);
+                                        //buffer.writeUInt32BE((command.ptr >> 32), 0);
+                                        buffer.writeUInt32BE((command.ptr & 0xFFFFFFFF), 4);
+                                        obj.fs.read(fd, buffer, 8, command.size, command.ptr, function (err, bytesRead, buffer) { if (err != null) return; if (bytesRead > (buffer.length - 8)) { buffer = buffer.slice(0, bytesRead + 8); } ws.send(buffer); });
+                                    } catch (ex) { }
                                     break;
                                 }
                             }
@@ -4440,7 +4658,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                     if (webRelayPort == 0) { res.sendStatus(404); return; }
 
                     // Create the authentication cookie
-                    const authCookieData = { userid: c.uid, domainid: domain.id, nid: c.nid, ip: req.clientIp, p: c.p, gn: c.gn, r: 8, expire: c.expire, pid: c.pid, port: c.port };
+                    // Include cf so these cookies match the device-share guest shape used elsewhere.
+                    const authCookieData = { userid: c.uid, domainid: domain.id, nid: c.nid, ip: req.clientIp, p: c.p, gn: c.gn, cf: (typeof c.cf == 'number') ? c.cf : 0, r: 8, expire: c.expire, pid: c.pid, port: c.port };
                     if ((authCookieData.userid == null) && (authCookieData.pid.startsWith('AS:node/'))) { authCookieData.nouser = 1; }
                     const authCookie = obj.parent.encodeCookie(authCookieData, obj.parent.loginCookieEncryptionKey);
 
@@ -4468,7 +4687,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                     var httpsPort = ((obj.args.aliasport == null) ? obj.args.port : obj.args.aliasport); // Use HTTPS alias port is specified
                     parent.debug('web', 'handleSharingRequest: Sending guest sharing page for \"' + c.uid + '\", guest \"' + c.gn + '\".');
                     res.set({ 'Cache-Control': 'no-store' });
-                    render(req, res, getRenderPage('sharing', req, domain), getRenderArgs({ authCookie: authCookie, authRelayCookie: '', domainurl: encodeURIComponent(domain.url).replace(/'/g, '%27'), nodeid: c.nid, serverDnsName: obj.getWebServerName(domain, req), serverRedirPort: args.redirport, serverPublicPort: httpsPort, expire: c.expire, viewOnly: (c.vo == 1) ? 1 : 0, nodeName: encodeURIComponent(node.name).replace(/'/g, '%27'), features: c.p, features2: features2 }, req, domain));
+                    render(req, res, getRenderPage('sharing', req, domain), getRenderArgs({ authCookie: authCookie, authRelayCookie: '', domainurl: encodeURIComponent(domain.url).replace(/'/g, '%27'), nodeid: c.nid, agentId: (node.agent != null) ? node.agent.id : 0, serverDnsName: obj.getWebServerName(domain, req), serverRedirPort: args.redirport, serverPublicPort: httpsPort, expire: c.expire, viewOnly: (c.vo == 1) ? 1 : 0, nodeName: encodeURIComponent(node.name).replace(/'/g, '%27'), features: c.p, features2: features2 }, req, domain));
                 }
             });
         });
@@ -4532,6 +4751,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         if ((req.query.link == null) || (req.session == null) || (req.session.userid == null) || (domain == null) || (domain.userQuota == -1)) { res.sendStatus(404); return; }
         const user = obj.users[req.session.userid];
         if (user == null) { res.sendStatus(404); return; }
+        if (obj.force2factorPending(domain, user, req)) { res.sendStatus(404); return; } // 2FA setup is still required for this account
         const file = obj.getServerFilePath(user, domain, req.query.link);
         if (file == null) { res.sendStatus(404); return; }
         setContentDispositionHeader(res, 'application/octet-stream', file.name, null, 'file.bin');
@@ -4574,7 +4794,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             // If an authentication cookie is embedded in the form, use that.
             if ((fields != null) && (fields.auth != null) && (fields.auth.length == 1) && (typeof fields.auth[0] == 'string')) {
                 var loginCookie = obj.parent.decodeCookie(fields.auth[0], obj.parent.loginCookieEncryptionKey, 60); // 60 minute timeout
-                if ((loginCookie != null) && (loginCookie.ip != null) && !checkCookieIp(loginCookie.ip, req.clientIp)) { loginCookie = null; } // Check cookie IP binding.
+                if ((loginCookie != null) && (checkAuthCookie(loginCookie, req) == false)) { loginCookie = null; } // Check cookie IP and session binding.
                 if ((loginCookie != null) && (domain.id == loginCookie.domainid)) { authUserid = loginCookie.userid; } // Use cookie authentication
             }
             if (authUserid == null) { res.sendStatus(401); return; }
@@ -4583,6 +4803,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             // Get the user
             const user = obj.users[authUserid];
             if (user == null) { res.sendStatus(401); return; } // Check this user exists
+            if (obj.force2factorPending(domain, user, req)) { res.sendStatus(401); return; } // 2FA setup is still required for this account
 
             // Get the node and check node rights
             const nodeid = fields.attrib[0];
@@ -4619,7 +4840,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             // If an authentication cookie is embedded in the form, use that.
             if ((fields != null) && (fields.auth != null) && (fields.auth.length == 1) && (typeof fields.auth[0] == 'string')) {
                 var loginCookie = obj.parent.decodeCookie(fields.auth[0], obj.parent.loginCookieEncryptionKey, 60); // 60 minute timeout
-                if ((loginCookie != null) && (loginCookie.ip != null) && !checkCookieIp(loginCookie.ip, req.clientIp)) { loginCookie = null; } // Check cookie IP binding.
+                if ((loginCookie != null) && (checkAuthCookie(loginCookie, req) == false)) { loginCookie = null; } // Check cookie IP and session binding.
                 if ((loginCookie != null) && (domain.id == loginCookie.domainid)) { authUserid = loginCookie.userid; } // Use cookie authentication
             }
             if (authUserid == null) { res.sendStatus(401); return; }
@@ -4628,6 +4849,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             // Get the user
             const user = obj.users[authUserid];
             if (user == null) { res.sendStatus(401); return; } // Check this user exists
+            if (obj.force2factorPending(domain, user, req)) { res.sendStatus(401); return; } // 2FA setup is still required for this account
 
             // Get the node and check node rights
             const nodeid = fields.attrib[0];
@@ -4660,6 +4882,148 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         return obj.path.join(obj.parent.datapath, 'icons', 'custom', userKey);
     }
 
+    // Maximum accepted custom icon upload size, in bytes.
+    const customIconMaxFileSize = 10485760;
+    // Maximum accepted width or height for uploaded PNG/JPEG sidebar icons, in pixels.
+    const customIconMaxDimension = 64;
+    // Image extensions accepted for uploaded custom sidebar icons.
+    const customIconAllowedExtensions = new Set(['.svg', '.png', '.jpg', '.jpeg']);
+
+    /**
+     * Return the HTTP response MIME type for a stored custom icon filename.
+     *
+     * @param {string} iconName Filename or path segment for the stored custom icon.
+     * @returns {string|null} MIME type for supported icons, or null for unsupported extensions.
+     */
+    function getCustomIconMimeType(iconName) {
+        const lower = iconName.toLowerCase();
+        if (lower.endsWith('.svg')) { return 'image/svg+xml'; }
+        if (lower.endsWith('.png')) { return 'image/png'; }
+        if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) { return 'image/jpeg'; }
+        return null;
+    }
+
+    /**
+     * Reject SVG content that can execute script or load external content.
+     *
+     * @param {string} svgContent Raw UTF-8 SVG content from the uploaded file.
+     * @returns {string|null} SVG content safe to store, or null if it is invalid or unsafe.
+     */
+    function cleanSvg(svgContent) {
+        if (typeof svgContent !== 'string') { return null; }
+        const cleaned = (svgContent.charCodeAt(0) === 0xFEFF) ? svgContent.substring(1) : svgContent;
+        if (cleaned.search(/<svg[\s>]/i) < 0) { return null; }
+        if (cleaned.search(/<\s*(script|foreignObject|iframe|object|embed|applet|link|meta)\b/i) >= 0) { return null; }
+        if (cleaned.search(/\s+on[a-z0-9_-]+\s*=/i) >= 0) { return null; }
+        if (cleaned.search(/\s+(href|xlink:href|src)\s*=\s*(['"]?)\s*(?!#)/i) >= 0) { return null; }
+        return cleaned;
+    }
+
+    /**
+     * Check if a JPEG marker is a Start Of Frame marker that contains image dimensions.
+     *
+     * @param {number} marker JPEG marker byte after the 0xFF prefix.
+     * @returns {boolean} True when the marker segment contains width and height fields.
+     */
+    function isJpegStartOfFrameMarker(marker) {
+        return ((marker >= 0xC0) && (marker <= 0xC3)) || ((marker >= 0xC5) && (marker <= 0xC7)) || ((marker >= 0xC9) && (marker <= 0xCB)) || ((marker >= 0xCD) && (marker <= 0xCF));
+    }
+
+    /**
+     * Read JPEG dimensions from header bytes without fully decoding the image.
+     *
+     * @param {Buffer} data Initial bytes from the uploaded JPEG file.
+     * @returns {{width:number,height:number}|null} Parsed dimensions, or null if the JPEG header is invalid or incomplete.
+     */
+    function getJpegDimensions(data) {
+        // JPEG files must start with the SOI marker.
+        if ((data.length < 4) || (data[0] !== 0xFF) || (data[1] !== 0xD8)) { return null; }
+        // Start scanning after the SOI marker.
+        var offset = 2;
+        while (offset + 9 < data.length) {
+            // Each JPEG segment starts with a marker prefix.
+            if (data[offset] !== 0xFF) { return null; }
+            // Skip fill bytes before the marker value.
+            while ((offset < data.length) && (data[offset] === 0xFF)) { offset++; }
+            const marker = data[offset++];
+            // SOI/EOI and restart markers do not carry segment lengths.
+            if ((marker === 0xD8) || (marker === 0xD9)) { continue; }
+            if ((marker >= 0xD0) && (marker <= 0xD7)) { continue; }
+            // Remaining markers should include a two-byte segment length.
+            if (offset + 2 > data.length) { return null; }
+            const segmentLength = data.readUInt16BE(offset);
+            if (segmentLength < 2) { return null; }
+            if (isJpegStartOfFrameMarker(marker)) {
+                // SOF payload layout: precision, height, width.
+                if (offset + 7 > data.length) { return null; }
+                return { width: data.readUInt16BE(offset + 5), height: data.readUInt16BE(offset + 3) };
+            }
+            // Move to the next marker segment.
+            offset += segmentLength;
+        }
+        return null;
+    }
+
+    /**
+     * Validate the raster image signature and extract dimensions for supported custom icon formats.
+     *
+     * @param {Buffer} data Initial bytes from the uploaded icon file.
+     * @param {string} extension Lowercase extension from the original uploaded filename.
+     * @returns {{width:number,height:number}|null} Parsed raster dimensions, or null if the signature/type is invalid.
+     */
+    function getCustomIconDimensions(data, extension) {
+        // PNG dimensions are fixed in the IHDR chunk at byte offsets 16 and 20.
+        if ((extension === '.png') && (data.length >= 24) && (data[0] === 0x89) && (data[1] === 0x50) && (data[2] === 0x4E) && (data[3] === 0x47) && (data[4] === 0x0D) && (data[5] === 0x0A) && (data[6] === 0x1A) && (data[7] === 0x0A)) {
+            return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
+        }
+        // JPEG dimensions are stored in the first SOF marker segment.
+        if (((extension === '.jpg') || (extension === '.jpeg')) && (data.length >= 3) && (data[0] === 0xFF) && (data[1] === 0xD8) && (data[2] === 0xFF)) {
+            return getJpegDimensions(data);
+        }
+        return null;
+    }
+
+    /**
+     * Enforce custom icon upload policy before moving the temp file into persistent storage.
+     * SVG files are checked for active content; PNG/JPEG files are signature and dimension checked.
+     *
+     * @param {string} iconTempPath Safe resolved path to the uploaded temp file.
+     * @param {string} extension Lowercase extension from the original uploaded filename.
+     * @param {function(string|null):void} callback Called with null on success, or a user-safe error message on failure.
+     */
+    function validateCustomIconFile(iconTempPath, extension, callback) {
+        obj.fs.stat(iconTempPath, function (statErr, stats) {
+            if (statErr) { callback('Unable to read uploaded icon.'); return; }
+            if ((stats == null) || (stats.isFile() !== true)) { callback('Invalid icon file.'); return; }
+            // Reject empty and oversized uploads before reading any file content.
+            if ((stats.size < 4) || (stats.size > customIconMaxFileSize)) { callback('Icon files must be non-empty and ' + (customIconMaxFileSize / 1048576) + ' MB or smaller.'); return; }
+            if (extension === '.svg') {
+                obj.fs.readFile(iconTempPath, 'utf8', function (readErr, svgContent) {
+                    if (readErr) { callback('Unable to read uploaded icon.'); return; }
+                    const cleanedSvg = cleanSvg(svgContent);
+                    if (cleanedSvg == null) { callback('Invalid SVG icon file.'); return; }
+                    obj.fs.writeFile(iconTempPath, cleanedSvg, 'utf8', function (writeErr) {
+                        callback(writeErr ? 'Unable to clean uploaded SVG icon.' : null);
+                    });
+                });
+                return;
+            }
+            obj.fs.open(iconTempPath, 'r', function (openErr, fd) {
+                if (openErr) { callback('Unable to read uploaded icon.'); return; }
+                // Reading the first 64 KB is enough for normal PNG headers and JPEG SOF markers.
+                const header = Buffer.alloc(Math.min(stats.size, 65536));
+                obj.fs.read(fd, header, 0, header.length, 0, function (readErr, bytesRead) {
+                    obj.fs.close(fd, function () { });
+                    if (readErr) { callback('Unable to read uploaded icon.'); return; }
+                    const dimensions = getCustomIconDimensions(header.slice(0, bytesRead), extension);
+                    if (dimensions == null) { callback('The uploaded icon does not match its file type.'); return; }
+                    if ((dimensions.width < 1) || (dimensions.height < 1) || (dimensions.width > customIconMaxDimension) || (dimensions.height > customIconMaxDimension)) { callback('Icon images must be ' + customIconMaxDimension + ' x ' + customIconMaxDimension + ' pixels or smaller.'); return; }
+                    callback(null);
+                });
+            });
+        });
+    }
+
     function handleCustomIconUpload(req, res) {
         const domain = checkUserIpAddress(req, res);
         if (domain == null) { return; }
@@ -4668,9 +5032,9 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         if (user == null) { res.sendStatus(401); return; }
 
         const multiparty = require('multiparty');
-        const form = new multiparty.Form();
+        const form = new multiparty.Form({ maxFilesSize: customIconMaxFileSize });
         form.parse(req, function (err, fields, files) {
-            if (err) { res.status(400).json({ success: false, error: 'Invalid form submission.' }); return; }
+            if (err) { res.status(400).json({ success: false, error: (err.status === 413) ? 'Icon files must be non-empty and ' + (customIconMaxFileSize / 1048576) + ' MB or smaller.' : 'Invalid form submission.' }); return; }
 
             const allowedTypes = { myDevices: 1, myAccount: 1, myEvents: 1, myFiles: 1, myUsers: 1, myServer: 1 };
             const iconType = (fields && fields.iconType && fields.iconType[0]) ? fields.iconType[0] : null;
@@ -4684,7 +5048,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             const cleanupTempFile = function () { try { obj.fs.unlink(iconTempPath, function () { }); } catch (ex) { } };
 
             const extension = obj.path.extname(iconFile.originalFilename || '').toLowerCase();
-            if ((extension !== '.svg') && (extension !== '.png')) { cleanupTempFile(); res.status(400).json({ success: false, error: 'Only SVG and PNG files are supported.' }); return; }
+            if (customIconAllowedExtensions.has(extension) === false) { cleanupTempFile(); res.status(400).json({ success: false, error: 'Only SVG, PNG and JPEG icon files are supported.' }); return; }
 
             const iconsRoot = obj.path.join(obj.parent.datapath, 'icons');
             const customDir = obj.path.join(iconsRoot, 'custom');
@@ -4697,27 +5061,32 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
 
             const previousIcon = (fields && fields.previousIcon && fields.previousIcon[0]) ? fields.previousIcon[0] : null;
             const previousInfo = resolveCustomIconPath(previousIcon, user);
-            if ((previousInfo != null) && (previousInfo.isOwned === true)) {
-                try { obj.fs.unlinkSync(previousInfo.diskPath); } catch (ex) { }
-            }
 
             const newFilename = iconType + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 8) + extension;
             const destinationPath = obj.path.join(userCustomDir, newFilename);
 
-            const respondSuccess = function () { res.json({ success: true, path: domain.url + 'icons/custom/' + userKey + '/' + newFilename }); };
-
-            obj.fs.rename(iconTempPath, destinationPath, function (renameErr) {
-                if (renameErr == null) { respondSuccess(); return; }
-                if ((renameErr != null) && (renameErr.code === 'EXDEV')) {
-                    obj.common.copyFile(iconTempPath, destinationPath, function (copyErr) {
-                        cleanupTempFile();
-                        if (copyErr) { res.status(500).json({ success: false, error: 'Failed to save uploaded icon.' }); return; }
-                        respondSuccess();
-                    });
-                } else {
-                    cleanupTempFile();
-                    res.status(500).json({ success: false, error: 'Failed to save uploaded icon.' });
+            const respondSuccess = function () {
+                if ((previousInfo != null) && (previousInfo.isOwned === true)) {
+                    try { obj.fs.unlinkSync(previousInfo.diskPath); } catch (ex) { }
                 }
+                res.json({ success: true, path: domain.url + 'icons/custom/' + userKey + '/' + newFilename });
+            };
+
+            validateCustomIconFile(iconTempPath, extension, function (validationError) {
+                if (validationError != null) { cleanupTempFile(); res.status(400).json({ success: false, error: validationError }); return; }
+                obj.fs.rename(iconTempPath, destinationPath, function (renameErr) {
+                    if (renameErr == null) { respondSuccess(); return; }
+                    if ((renameErr != null) && (renameErr.code === 'EXDEV')) {
+                        obj.common.copyFile(iconTempPath, destinationPath, function (copyErr) {
+                            cleanupTempFile();
+                            if (copyErr) { res.status(500).json({ success: false, error: 'Failed to save uploaded icon.' }); return; }
+                            respondSuccess();
+                        });
+                    } else {
+                        cleanupTempFile();
+                        res.status(500).json({ success: false, error: 'Failed to save uploaded icon.' });
+                    }
+                });
             });
         });
     }
@@ -4751,7 +5120,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         }
 
         const lower = iconName.toLowerCase();
-        if ((lower.endsWith('.svg') === false) && (lower.endsWith('.png') === false)) { return null; }
+        if ((lower.endsWith('.svg') === false) && (lower.endsWith('.png') === false) && (lower.endsWith('.jpg') === false) && (lower.endsWith('.jpeg') === false)) { return null; }
         return { ownerKey: ownerKey, iconName: iconName, diskPath: diskPath, isOwned: isOwned, isLegacy: (pathParts.length === 1) };
     }
 
@@ -4783,11 +5152,14 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         const iconInfo = resolveCustomIconPath('/icons/custom/' + req.params[0], user);
         if (iconInfo == null) { res.sendStatus(404); return; }
         if ((iconInfo.isLegacy !== true) && (iconInfo.isOwned !== true)) { res.sendStatus(404); return; }
-        const iconNameLower = iconInfo.iconName.toLowerCase();
+        const contentType = getCustomIconMimeType(iconInfo.iconName);
+        if (contentType == null) { res.sendStatus(404); return; }
 
         obj.fs.readFile(iconInfo.diskPath, function (err, data) {
             if (err) { res.sendStatus(404); return; }
-            res.set({ 'Content-Type': iconNameLower.endsWith('.png') ? 'image/png' : 'image/svg+xml' });
+            const headers = { 'Content-Type': contentType, 'X-Content-Type-Options': 'nosniff' };
+            if (contentType === 'image/svg+xml') { headers['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'; script-src 'none'; object-src 'none'; base-uri 'none'"; }
+            res.set(headers);
             res.send(data);
         });
     }
@@ -4804,7 +5176,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             // If an authentication cookie is embedded in the form, use that.
             if ((fields != null) && (fields.auth != null) && (fields.auth.length == 1) && (typeof fields.auth[0] == 'string')) {
                 var loginCookie = obj.parent.decodeCookie(fields.auth[0], obj.parent.loginCookieEncryptionKey, 60); // 60 minute timeout
-                if ((loginCookie != null) && (loginCookie.ip != null) && !checkCookieIp(loginCookie.ip, req.clientIp)) { loginCookie = null; } // Check cookie IP binding.
+                if ((loginCookie != null) && (checkAuthCookie(loginCookie, req) == false)) { loginCookie = null; } // Check cookie IP and session binding.
                 if ((loginCookie != null) && (domain.id == loginCookie.domainid)) { authUserid = loginCookie.userid; } // Use cookie authentication
             }
             if (authUserid == null) { res.sendStatus(401); return; }
@@ -4812,6 +5184,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             // Get the user
             const user = obj.users[authUserid];
             if ((user == null) || (user.siteadmin & 8) == 0) { res.sendStatus(401); return; } // Check if we have file rights
+            if (obj.force2factorPending(domain, user, req)) { res.sendStatus(401); return; } // 2FA setup is still required for this account
 
             if ((fields == null) || (fields.link == null) || (fields.link.length != 1)) { /*console.log('UploadFile, Invalid Fields:', fields, files);*/ console.log('err4'); res.sendStatus(404); return; }
             var xfile = null;
@@ -4821,6 +5194,10 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             var totalsize = readTotalFileSize(xfile.fullpath);
             if ((xfile.quota == null) || (totalsize < xfile.quota)) { // Check if the quota is not already broken
                 if (fields.name != null) {
+                    if ((fields.name.length != 1) || (typeof fields.name[0] != 'string') ||
+                        (fields.size == null) || (fields.size.length != 1) || (typeof fields.size[0] != 'string') ||
+                        (fields.type == null) || (fields.type.length != 1) || (typeof fields.type[0] != 'string') ||
+                        (fields.data == null) || (fields.data.length != 1) || (typeof fields.data[0] != 'string')) { res.sendStatus(400); return; }
 
                     // See if we need to create the folder
                     var domainx = 'domain';
@@ -4912,7 +5289,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             // If an authentication cookie is embedded in the form, use that.
             if ((fields != null) && (fields.auth != null) && (fields.auth.length == 1) && (typeof fields.auth[0] == 'string')) {
                 var loginCookie = obj.parent.decodeCookie(fields.auth[0], obj.parent.loginCookieEncryptionKey, 60); // 60 minute timeout
-                if ((loginCookie != null) && (loginCookie.ip != null) && !checkCookieIp(loginCookie.ip, req.clientIp)) { loginCookie = null; } // Check cookie IP binding.
+                if ((loginCookie != null) && (checkAuthCookie(loginCookie, req) == false)) { loginCookie = null; } // Check cookie IP and session binding.
                 if ((loginCookie != null) && (domain.id == loginCookie.domainid)) { authUserid = loginCookie.userid; } // Use cookie authentication
             }
             if (authUserid == null) { res.sendStatus(401); return; }
@@ -4920,6 +5297,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             // Get the user
             const user = obj.users[authUserid];
             if (user == null) { parent.debug('web', 'Batch upload error, invalid user.'); res.sendStatus(401); return; } // Check if user exists
+            if (obj.force2factorPending(domain, user, req)) { res.sendStatus(401); return; } // 2FA setup is still required for this account
 
             // Get fields
             if ((fields == null) || (fields.nodeIds == null) || (fields.nodeIds.length != 1)) { res.sendStatus(404); return; }
@@ -4944,11 +5322,15 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             // More typical upload method, the file data is in a multipart mime post.
             for (var i in files.files) {
                 var file = files.files[i];
-                const ftarget = getRandomPassword() + '-' + file.originalFilename;
+                // Keep only a plain filename for the temporary target, matching the single-file upload handler above.
+                var originalFilename = (typeof file.originalFilename === 'string') ? file.originalFilename : '';
+                var safeOriginalFilename = obj.path.basename(originalFilename);
+                if ((safeOriginalFilename !== originalFilename) || (obj.common.IsFilenameValid(safeOriginalFilename) == false)) { res.sendStatus(404); return; }
+                const ftarget = getRandomPassword() + '-' + safeOriginalFilename;
                 const targetPath = obj.path.join(serverpath, ftarget);
                 const uploadTempPath = resolveSafeUploadTempPath(file.path);
                 if (uploadTempPath == null) { res.sendStatus(400); return; }
-                cmd.files.push({ name: file.originalFilename, target: ftarget });
+                cmd.files.push({ name: safeOriginalFilename, target: ftarget });
                 // Rename the file
                 obj.fs.rename(uploadTempPath, targetPath, function (err) {
                     if (err && (err.code === 'EXDEV')) {
@@ -4967,6 +5349,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             for (var i in cmd.nodeids) {
                 obj.GetNodeWithRights(cmd.domain, cmd.user, cmd.nodeids[i], function (node, rights, visible) {
                     if ((node == null) || ((rights & 8) == 0) || (visible == false)) return; // We don't have remote control rights to this device
+                    if ((rights != MESHRIGHT_ADMIN) && ((rights & MESHRIGHT_NOFILES) != 0)) return; // This user is not allowed to use files on this device
                     var agentPath = (((node.agent.id > 0) && (node.agent.id < 5)) || (node.agent.id == 34)) ? cmd.windowsPath : cmd.linuxPath;
                     if (agentPath == null) return;
 
@@ -5044,14 +5427,15 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
 
         // Fetch information about the target
         obj.db.Get(req.query.host, function (err, docs) {
-            if (docs.length == 0) { console.log('ERR: Node not found'); try { ws.close(); } catch (e) { } return; } // Disconnect websocket
+            if ((err != null) || (docs == null) || (docs.length != 1)) { console.log('ERR: Node not found'); try { ws.close(); } catch (e) { } return; } // Disconnect websocket
             var xusername = '', xdevicename = '', xdevicename2 = null, node = null;
             node = docs[0]; xdevicename2 = node.name; xdevicename = '-' + parent.common.makeFilename(node.name); ws.id = getRandomPassword(); ws.time = Date.now();
             if (!node.intelamt) { console.log('ERR: Not AMT node'); try { ws.close(); } catch (e) { } return; } // Disconnect websocket
-            var ciraconn = parent.mpsserver.GetConnectionToNode(req.query.host, null, false);
 
             // Check if this user has permission to manage this computer
-            if ((obj.GetNodeRights(user, node.meshid, node._id) & MESHRIGHT_REMOTECONTROL) == 0) { console.log('ERR: Access denied (3)'); try { ws.close(); } catch (e) { } return; }
+            const rights = obj.GetNodeRights(user, node.meshid, node._id);
+            if (((rights & MESHRIGHT_REMOTECONTROL) == 0) || ((rights != MESHRIGHT_ADMIN) && ((rights & MESHRIGHT_NOAMT) != 0))) { console.log('ERR: Access denied (3)'); try { ws.close(); } catch (e) { } return; }
+            var ciraconn = (parent.mpsserver != null) ? parent.mpsserver.GetConnectionToNode(req.query.host, null, false) : null;
 
             // Check what connectivity is available for this node
             var state = parent.GetConnectivityState(req.query.host);
@@ -5869,8 +6253,11 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         });
     };
 
+    // Backup files prepared through the web UI, by userid. backup.zip serves each one once.
+    obj.preparedBackups = {};
+
     // Handle a server backup request
-    function handleBackupRequest(req, res) {
+    async function handleBackupRequest(req, res) {
         const domain = checkUserIpAddress(req, res);
         if (domain == null) { return; }
         if ((domain.loginkey != null) && (domain.loginkey.indexOf(req.query.key) == -1)) { res.sendStatus(404); return; } // Check 3FA URL key
@@ -5880,23 +6267,32 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         var user = obj.users[req.session.userid];
         if ((user == null) || ((user.siteadmin & 1) == 0)) { res.sendStatus(401); return; } // Check if we have server backup rights
 
-        // Require modules
-        const archive = require('archiver')('zip', { level: 9 }); // Sets the compression method to maximum.
+        // If the web UI already prepared a backup for this user, send it right away
+        const preparedBackup = obj.preparedBackups[user._id];
+        if (preparedBackup != null) {
+            delete obj.preparedBackups[user._id];
+            if (obj.fs.existsSync(preparedBackup)) {
+                res.setHeader('Content-Type', 'application/x-zip-compressed');
+                res.download(preparedBackup);
+                return;
+            }
+        }
 
-        // Good practice to catch this error explicitly
-        archive.on('error', function (err) { throw err; });
-
-        // Set the archive name
-        res.attachment((domain.title ? domain.title : 'MeshCentral') + '-Backup-' + new Date().toLocaleDateString().replace('/', '-').replace('/', '-') + '.zip');
-
-        // Pipe archive data to the file
-        archive.pipe(res);
-
-        // Append files from a glob pattern
-        archive.directory(obj.parent.datapath, false);
-
-        // Finalize the archive (ie we are done appending files but streams have to finish yet)
-        archive.finalize();
+        // start a new backup and async wait for it to finish with a timeout
+        if (parent.config.settings.autobackup.backupintervalhours == -1) { res.status(403).send("Backup disabled."); return; };
+        obj.db.performBackup();
+        const waitFor = ms => new Promise(res => setTimeout(res, ms));
+        var backupStart = Date.now();
+        while ((obj.db.performingBackup) && ((Date.now() - backupStart) < 120 * 1000)) {
+            await waitFor(2000);
+        }
+        if (obj.fs.existsSync(obj.db.newAutoBackupFile) && obj.db.performingBackup == false) {
+            res.setHeader('Content-Type', 'application/x-zip-compressed');
+            res.download(obj.db.newAutoBackupFile);
+        } else {
+            obj.parent.addServerWarning('handleBackupRequest: Backup error', true);
+            res.status(500).send("Backup error.");
+        }
     }
 
     // Handle a server restore request
@@ -5914,7 +6310,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             // If an authentication cookie is embedded in the form, use that.
             if ((fields != null) && (fields.auth != null) && (fields.auth.length == 1) && (typeof fields.auth[0] == 'string')) {
                 var loginCookie = obj.parent.decodeCookie(fields.auth[0], obj.parent.loginCookieEncryptionKey, 60); // 60 minute timeout
-                if ((loginCookie != null) && (loginCookie.ip != null) && !checkCookieIp(loginCookie.ip, req.clientIp)) { loginCookie = null; } // Check cookie IP binding.
+                if ((loginCookie != null) && (checkAuthCookie(loginCookie, req) == false)) { loginCookie = null; } // Check cookie IP and session binding.
                 if ((loginCookie != null) && (domain.id == loginCookie.domainid)) { authUserid = loginCookie.userid; } // Use cookie authentication
             }
             if (authUserid == null) { res.sendStatus(401); return; }
@@ -5924,7 +6320,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             if ((user == null) || ((user.siteadmin & 4) == 0)) { res.sendStatus(401); return; } // Check if we have server restore rights
 
             res.set('Content-Type', 'text/html');
-            res.end('<html><body>Server must be restarted, <a href="' + domain.url + '">click here to login</a>.</body></html>');
+            const rootUrl = req.protocol + '://' + req.get('host') + (req.query.key ? '/?key=' + req.query.key : '/');
+            res.end('<html><body><script>setTimeout(function(){window.location.replace("' + rootUrl + '");}, 10000);</script>Server will be restarted, <a href="' + domain.url + '">click here to login</a>.</body></html>');
             parent.Stop(files.datafile[0].path);
         });
     }
@@ -5935,7 +6332,11 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         if (domain == null) { parent.debug('web', 'handleRootRequest: invalid domain.'); try { res.sendStatus(404); } catch (ex) { } return; }
 
         // If required, check if this user has rights to do this
-        if ((obj.parent.config.settings != null) && ((obj.parent.config.settings.lockagentdownload == true) || (domain.lockagentdownload == true)) && (req.session.userid == null)) { res.sendStatus(401); return; }
+        if ((obj.parent.config.settings != null) && ((obj.parent.config.settings.lockagentdownload == true) || (domain.lockagentdownload == true)) && (req.session.userid == null)) {
+            // Agents fetching their own update have no session, the agentupdate command gives them a cookie instead
+            var updatecookie = obj.parent.decodeCookie(req.query.auth, obj.parent.loginCookieEncryptionKey, 10); // 10 minute timeout, covers the agent's download retries
+            if ((updatecookie == null) || (updatecookie.a != 'aupd') || (req.query.id == null) || (updatecookie.i != req.query.id)) { res.sendStatus(401); return; }
+        }
 
         if ((req.query.meshinstall != null) && (req.query.id != null)) {
             if ((domain.loginkey != null) && (domain.loginkey.indexOf(req.query.key) == -1)) { try { res.sendStatus(404); } catch (ex) { } return; } // Check 3FA URL key
@@ -6148,11 +6549,11 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             }
 
             // No signed agents, we are going to merge a new MeshCmd.
-            if (((agentid == 3) || (agentid == 4)) && (obj.parent.meshAgentBinaries[agentid + 10000] != null)) { agentid += 10000; } // Avoid merging javascript to a signed mesh agent.
+            if (((agentid == 3) || (agentid == 4) || (agentid == 43)) && (obj.parent.meshAgentBinaries[agentid + 10000] != null)) { agentid += 10000; } // Avoid merging javascript to a signed mesh agent.
             var argentInfo = obj.parent.meshAgentBinaries[agentid];
             if (domain.meshAgentBinaries && domain.meshAgentBinaries[agentid]) { argentInfo = domain.meshAgentBinaries[agentid]; }
             if ((argentInfo == null) || (obj.parent.defaultMeshCmd == null)) { try { res.sendStatus(404); } catch (ex) { } return; }
-            setContentDispositionHeader(res, 'application/octet-stream', 'meshcmd' + ((req.query.meshcmd <= 4) ? '.exe' : ''), null, 'meshcmd');
+            setContentDispositionHeader(res, 'application/octet-stream', (req.query.meshcmd == 43) ? 'meshcmd-arm64.exe' : 'meshcmd' + ((req.query.meshcmd <= 4) ? '.exe' : ''), null, 'meshcmd');
             res.statusCode = 200;
 
             if (argentInfo.signedMeshCmdPath != null) {
@@ -6176,7 +6577,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                     if (req.query.meshaction == 'winrouter') {
                         var p = null;
                         if (obj.parent.meshToolsBinaries['MeshCentralRouter']) { p = obj.parent.meshToolsBinaries['MeshCentralRouter'].path; }
-                        if ((p == null) || (!obj.fs.existsSync(p))) { p = obj.path.join(__dirname, 'agents', 'MeshCentralRouter.exe'); }
+                        if ((p == null) || (!obj.fs.existsSync(p))) { p = obj.parent.getAgentBinaryPath('MeshCentralRouter.exe'); }
                         if (obj.fs.existsSync(p)) {
                             setContentDispositionHeader(res, 'application/octet-stream', 'MeshCentralRouter.exe', null, 'MeshCentralRouter.exe');
                             try { res.sendFile(p); } catch (ex) { }
@@ -6185,7 +6586,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                     } else if (req.query.meshaction == 'winassistant') {
                         var p = null;
                         if (obj.parent.meshToolsBinaries['MeshCentralAssistant']) { p = obj.parent.meshToolsBinaries['MeshCentralAssistant'].path; }
-                        if ((p == null) || (!obj.fs.existsSync(p))) { p = obj.path.join(__dirname, 'agents', 'MeshCentralAssistant.exe'); }
+                        if ((p == null) || (!obj.fs.existsSync(p))) { p = obj.parent.getAgentBinaryPath('MeshCentralAssistant.exe'); }
                         if (obj.fs.existsSync(p)) {
                             setContentDispositionHeader(res, 'application/octet-stream', 'MeshCentralAssistant.exe', null, 'MeshCentralAssistant.exe');
                             try { res.sendFile(p); } catch (ex) { }
@@ -6194,7 +6595,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                     } else if (req.query.meshaction == 'macrouter') {
                         var p = null;
                         if (obj.parent.meshToolsBinaries['MeshCentralRouterMacOS']) { p = obj.parent.meshToolsBinaries['MeshCentralRouterMacOS'].path; }
-                        if ((p == null) || (!obj.fs.existsSync(p))) { p = obj.path.join(__dirname, 'agents', 'MeshCentralRouter.dmg'); }
+                        if ((p == null) || (!obj.fs.existsSync(p))) { p = obj.parent.getAgentBinaryPath('MeshCentralRouter.dmg'); }
                         if (obj.fs.existsSync(p)) {
                             setContentDispositionHeader(res, 'application/octet-stream', 'MeshCentralRouter.dmg', null, 'MeshCentralRouter.dmg');
                             try { res.sendFile(p); } catch (ex) { }
@@ -6257,7 +6658,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             } else if (req.query.meshaction == 'winrouter') {
                 var p = null;
                 if (parent.meshToolsBinaries['MeshCentralRouter']) { p = parent.meshToolsBinaries['MeshCentralRouter'].path; }
-                if ((p == null) || !obj.fs.existsSync(p)) { p = obj.path.join(__dirname, 'agents', 'MeshCentralRouter.exe'); }
+                if ((p == null) || !obj.fs.existsSync(p)) { p = obj.parent.getAgentBinaryPath('MeshCentralRouter.exe'); }
                 if (obj.fs.existsSync(p)) {
                     setContentDispositionHeader(res, 'application/octet-stream', 'MeshCentralRouter.exe', null, 'MeshCentralRouter.exe');
                     try { res.sendFile(p); } catch (ex) { }
@@ -6266,7 +6667,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             } else if (req.query.meshaction == 'winassistant') {
                 var p = null;
                 if (parent.meshToolsBinaries['MeshCentralAssistant']) { p = parent.meshToolsBinaries['MeshCentralAssistant'].path; }
-                if ((p == null) || !obj.fs.existsSync(p)) { p = obj.path.join(__dirname, 'agents', 'MeshCentralAssistant.exe'); }
+                if ((p == null) || !obj.fs.existsSync(p)) { p = obj.parent.getAgentBinaryPath('MeshCentralAssistant.exe'); }
                 if (obj.fs.existsSync(p)) {
                     setContentDispositionHeader(res, 'application/octet-stream', 'MeshCentralAssistant.exe', null, 'MeshCentralAssistant.exe');
                     try { res.sendFile(p); } catch (ex) { }
@@ -6275,7 +6676,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             } else if (req.query.meshaction == 'macrouter') {
                 var p = null;
                 if (parent.meshToolsBinaries['MeshCentralRouterMacOS']) { p = parent.meshToolsBinaries['MeshCentralRouterMacOS'].path; }
-                if ((p == null) || !obj.fs.existsSync(p)) { p = obj.path.join(__dirname, 'agents', 'MeshCentralRouter.dmg'); }
+                if ((p == null) || !obj.fs.existsSync(p)) { p = obj.parent.getAgentBinaryPath('MeshCentralRouter.dmg'); }
                 if (obj.fs.existsSync(p)) {
                     setContentDispositionHeader(res, 'application/octet-stream', 'MeshCentralRouter.dmg', null, 'MeshCentralRouter.dmg');
                     try { res.sendFile(p); } catch (ex) { }
@@ -6367,7 +6768,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                 var response = '<html><head><title>Mesh Agents Cores</title><style>table,th,td { border:1px solid black;border-collapse:collapse;padding:3px; }</style></head><body style=overflow:auto><table>';
                 response += '<tr style="background-color:lightgray"><th>Name</th><th>Size</th><th>Comp</th><th>Decompressed Hash SHA384</th></tr>';
                 for (var i in parent.defaultMeshCores) {
-                    response += '<tr><td>' + i.split(' ').join('&nbsp;') + '</td><td style="text-align:right"><a download href="/meshagents?dlcore=' + i + '">' + parent.defaultMeshCores[i].length + (req.query.key ? ('?key=' + encodeURIComponent(req.query.key)) : '') + '</a></td><td style="text-align:right"><a download href="/meshagents?dlccore=' + i + (req.query.key ? ('?key=' + encodeURIComponent(req.query.key)) : '') + '">' + parent.defaultMeshCoresDeflate[i].length + '</a></td><td>' + Buffer.from(parent.defaultMeshCoresHash[i], 'binary').toString('hex') + '</td></tr>';
+                    response += '<tr><td>' + i.split(' ').join('&nbsp;') + '</td><td style="text-align:right"><a download href="/meshagents?dlcore=' + i + (req.query.key ? ('&key=' + encodeURIComponent(req.query.key)) : '') + '">' + parent.defaultMeshCores[i].length + '</a></td><td style="text-align:right">' + ((parent.defaultMeshCoresDeflate[i] != null) ? ('<a download href="/meshagents?dlccore=' + i + (req.query.key ? ('&key=' + encodeURIComponent(req.query.key)) : '') + '">' + parent.defaultMeshCoresDeflate[i].length + '</a>') : '') + '</td><td>' + Buffer.from(parent.defaultMeshCoresHash[i], 'binary').toString('hex') + '</td></tr>';
                 }
                 response += '</table><a href="' + req.originalUrl.split('?')[0] + (req.query.key ? ('?key=' + encodeURIComponent(req.query.key)) : '') + '">Mesh Agents</a></body></html>';
                 res.send(response);
@@ -6442,9 +6843,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         let originUrl; try { originUrl = new URL(req.headers.origin); } catch (ex) { return false; }
         if (!originUrl.hostname) return false; // Origin hostname is not valid
         if (Array.isArray(domain.allowedorigin)) return (domain.allowedorigin.indexOf(originUrl.hostname) >= 0); // Check if this is an allowed origin from an explicit list
-        if (obj.isTrustedCert(domain) === false) return true; // This server does not have a trusted certificate.
         if (domain.dns != null) return (domain.dns == originUrl.hostname); // Match the domain DNS
-        return (obj.certificates.CommonName == originUrl.hostname); // Match the default server name
+        return (obj.getWebServerName(domain, req) == originUrl.hostname); // Match the server hostname
     }
 
     // Create a OSX mesh agent installer
@@ -6511,17 +6911,14 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         if (domain.agentTranslations != null) { meshsettings += 'translation=' + domain.agentTranslations + '\r\n'; }
 
         // Setup the response output
-        var archive = require('archiver')('zip', { level: 5 }); // Sets the compression method.
-        archive.on('error', function (err) { throw err; });
-
         // Customize the mesh agent file name
         var meshfilename = 'MeshAgent-' + mesh.name + '.zip';
         var meshexecutablename = 'meshagent';
-        var meshmpkgname = 'MeshAgent.mpkg';
+        var meshpkgname = 'MeshAgent.pkg';
         if ((domain.agentcustomization != null) && (typeof domain.agentcustomization.filename == 'string')) {
             meshfilename = meshfilename.split('MeshAgent').join(domain.agentcustomization.filename);
             meshexecutablename = meshexecutablename.split('meshagent').join(domain.agentcustomization.filename);
-            meshmpkgname = meshmpkgname.split('MeshAgent').join(domain.agentcustomization.filename);
+            meshpkgname = meshpkgname.split('MeshAgent').join(domain.agentcustomization.filename);
         }
 
         // Customise the mesh agent display name
@@ -6544,65 +6941,56 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
 
         // Set the agent download including the mesh name.
         setContentDispositionHeader(res, 'application/octet-stream', meshfilename, null, 'MeshAgent.zip');
-        archive.pipe(res);
 
-        // Opens the "MeshAgentOSXPackager.zip"
-        var yauzl = require('yauzl');
-        yauzl.open(obj.path.join(__dirname, 'agents', 'MeshAgentOSXPackager.zip'), { lazyEntries: true }, function (err, zipfile) {
-            if (err) { res.sendStatus(500); return; }
-            zipfile.readEntry();
-            zipfile.on('entry', function (entry) {
-                if (/\/$/.test(entry.fileName)) {
-                    // Skip all folder entries
-                    zipfile.readEntry();
-                } else {
-                    if (entry.fileName == 'MeshAgent.mpkg/Contents/distribution.dist') {
-                        // This is a special file entry, we need to fix it.
-                        zipfile.openReadStream(entry, function (err, readStream) {
-                            readStream.on('data', function (data) { if (readStream.xxdata) { readStream.xxdata += data; } else { readStream.xxdata = data; } });
-                            readStream.on('end', function () {
-                                var meshname = mesh.name.split(']').join('').split('[').join(''); // We can't have ']]' in the string since it will terminate the CDATA.
-                                var welcomemsg = 'Welcome to the MeshCentral agent for MacOS\n\nThis installer will install the mesh agent for "' + meshname + '" and allow the administrator to remotely monitor and control this computer over the internet. For more information, go to https://meshcentral.com.\n\nThis software is provided under Apache 2.0 license.\n';
-                                var installsize = Math.floor((argentInfo.size + meshsettings.length) / 1024);
-                                archive.append(readStream.xxdata.toString().split('###DISPLAYNAME###').join(meshdisplayname).split('###WELCOMEMSG###').join(welcomemsg).split('###INSTALLSIZE###').join(installsize), { name: entry.fileName.replace('MeshAgent.mpkg',meshmpkgname) });
-                                zipfile.readEntry();
-                            });
-                        });
-                    } else if (entry.fileName == 'MeshAgent.mpkg/Contents/Packages/internal.pkg/Contents/meshagent_osx64_LaunchAgent.plist' ||
-                        entry.fileName == 'MeshAgent.mpkg/Contents/Packages/internal.pkg/Contents/meshagent_osx64_LaunchDaemon.plist' ||
-                        entry.fileName == 'MeshAgent.mpkg/Contents/Packages/internal.pkg/Contents/Info.plist' ||
-                        entry.fileName == 'MeshAgent.mpkg/Contents/Packages/internal.pkg/Contents/Resources/postflight' ||
-                        entry.fileName == 'MeshAgent.mpkg/Contents/Packages/internal.pkg/Contents/Resources/Postflight.sh' ||
-                        entry.fileName == 'MeshAgent.mpkg/Contents/Packages/internal.pkg/Contents/Uninstall.command' ||
-                        entry.fileName == 'MeshAgent.mpkg/Uninstall.command') {
-                            // This is a special file entry, we need to fix it.
-                            zipfile.openReadStream(entry, function (err, readStream) {
-                                readStream.on('data', function (data) { if (readStream.xxdata) { readStream.xxdata += data; } else { readStream.xxdata = data; } });
-                                readStream.on('end', function () {
-                                    var options = { name: entry.fileName.replace('MeshAgent.mpkg',meshmpkgname) };
-                                    if (entry.fileName.endsWith('postflight') || entry.fileName.endsWith('Uninstall.command')) { options.mode = 493; }
-                                    archive.append(readStream.xxdata.toString().split('###SERVICENAME###').join(meshservicename).split('###COMPANYNAME###').join(meshcompanyname).split('###EXECUTABLENAME###').join(meshexecutablename), options);
-                                    zipfile.readEntry();
-                                });
-                            });
-                    } else {
-                        // Normal file entry
-                        zipfile.openReadStream(entry, function (err, readStream) {
-                            if (err) { throw err; }
-                            var options = { name: entry.fileName.replace('MeshAgent.mpkg',meshmpkgname) };
-                            if (entry.fileName.endsWith('postflight') || entry.fileName.endsWith('Uninstall.command')) { options.mode = 493; }
-                            archive.append(readStream, options);
-                            readStream.on('end', function () { zipfile.readEntry(); });
-                        });
-                    }
-                }
-            });
-            zipfile.on('end', function () {
-                archive.file(argentInfo.path, { name: 'MeshAgent.mpkg/Contents/Packages/internal.pkg/Contents/meshagent_osx64.bin'.replace('MeshAgent.mpkg',meshmpkgname) });
-                archive.append(meshsettings, { name: 'MeshAgent.mpkg/Contents/Packages/internal.pkg/Contents/meshagent_osx64.msh'.replace('MeshAgent.mpkg',meshmpkgname) });
-                archive.finalize();
-            });
-        });
+        // Create a flat XAR macOS installer package. Bundle .mpkg installers are rejected by recent macOS versions.
+        const macosInstallerOpts = {
+            agentPath: argentInfo.path,
+            meshSettings: meshsettings,
+            meshName: mesh.name.split(']').join('').split('[').join(''), // We can't have ']]' in the string since it will terminate the CDATA.
+            executableName: meshexecutablename,
+            packageName: meshpkgname,
+            displayName: meshdisplayname,
+            serviceName: meshservicename,
+            companyName: meshcompanyname
+        };
+
+        if ((domain.agentcustomization != null) && (typeof domain.agentcustomization.macosinstallerimage == 'string')) {
+            macosInstallerOpts.backgroundPath = parent.path.join(parent.datapath, domain.agentcustomization.macosinstallerimage);
+        }
+
+		require('./macosinstaller').createMacOSInstaller(macosInstallerOpts).then(async function (installer) {
+			const { Writable } = require('node:stream');
+			const zip = require('@zip.js/zip.js');
+
+			const zipWriter = new zip.ZipWriter(Writable.toWeb(res), { level: 5 });
+
+			await zipWriter.add(
+				meshpkgname,
+				new zip.Uint8ArrayReader(installer.pkg)
+			);
+
+			await zipWriter.add(
+				'Uninstall.command',
+				(typeof installer.uninstall === 'string')
+					? new zip.TextReader(installer.uninstall)
+					: new zip.Uint8ArrayReader(installer.uninstall),
+				{
+					executable: true,
+					unixMode: 0o100755
+				}
+			);
+
+			await zipWriter.close();
+		}).catch(function (err) {
+			parent.debug('web', 'Failed to build macOS MeshAgent package: ' + err);
+			try {
+				if (!res.headersSent) {
+					res.sendStatus(500);
+				} else {
+					res.destroy(err);
+				}
+			} catch (ex) { }
+		});
     }
 
     // Return a .msh file from a given request, id is the device group identifier or encrypted cookie with the identifier.
@@ -6896,6 +7284,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         if (obj.args.sessiontime != null) { sessionOptions.maxAge = (obj.args.sessiontime * 60000); } // sessiontime is minutes
         obj.app.use(require('cookie-session')(sessionOptions));
         obj.app.use(function (request, response, next) { // Patch for passport 0.6.0 - https://github.com/jaredhanson/passport/issues/904
+            // Behind a TLS offloader, mark the cookie Secure only on requests the proxy reports as HTTPS. Setting it on a plain request would throw.
+            if ((obj.args.sessionsecure === true) && (request.sessionOptions != null) && (request.protocol == 'https')) { request.sessionOptions.secure = true; }
             if (request.session && !request.session.regenerate) {
                 request.session.regenerate = function (cb) {
                     cb()
@@ -7244,8 +7634,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                 obj.app.ws(url + 'apf.ashx', function (ws, req) { obj.parent.mpsserver.onWebSocketConnection(ws, req); })
                 obj.app.get(url + 'webrelay.ashx', function (req, res) { res.send('Websocket connection expected'); });
                 obj.app.get(url + 'health.ashx', function (req, res) { res.send('ok'); }); // TODO: Perform more server checking.
-                obj.app.ws(url + 'webrelay.ashx', function (ws, req) { PerformWSSessionAuth(ws, req, false, handleRelayWebSocket); });
-                obj.app.ws(url + 'webider.ashx', function (ws, req) { PerformWSSessionAuth(ws, req, false, function (ws1, req1, domain, user, cookie, authData) { obj.meshIderHandler.CreateAmtIderSession(obj, obj.db, ws1, req1, obj.args, domain, user); }); });
+                obj.app.ws(url + 'webrelay.ashx', function (ws, req) { PerformWSRelayAuth(ws, req, false, handleRelayWebSocket); });
+                obj.app.ws(url + 'webider.ashx', function (ws, req) { PerformWSRelayAuth(ws, req, false, function (ws1, req1, domain, user, cookie, authData) { obj.meshIderHandler.CreateAmtIderSession(obj, obj.db, ws1, req1, obj.args, domain, user); }); });
                 obj.app.ws(url + 'control.ashx', function (ws, req) {
                     getWebsocketArgs(ws, req, function (ws, req) {
                         const domain = getDomain(req);
@@ -7260,6 +7650,12 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                             return;
                         }
                         PerformWSSessionAuth(ws, req, true, function (ws1, req1, domain, user, cookie, authData) {
+                            // Device share guest cookies are for relay sessions only, not control.ashx
+                            if (isDeviceShareGuestCookie(cookie)) {
+                                try { ws.send(JSON.stringify({ action: 'close', cause: 'noauth', msg: 'noauth' })); } catch (ex) { }
+                                try { ws.close(); } catch (ex) { }
+                                return;
+                            }
                             if (user == null) { // User is not authenticated, perform inner server authentication
                                 if (req.headers['x-meshauth'] === '*') {
                                     PerformWSSessionInnerAuth(ws, req, domain, function (ws1, req1, domain, user) { obj.meshUserHandler.CreateMeshUser(obj, obj.db, ws1, req1, obj.args, domain, user, authData); }); // User is authenticated
@@ -7275,6 +7671,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                 });
                 obj.app.ws(url + 'devicefile.ashx', function (ws, req) { obj.meshDeviceFileHandler.CreateMeshDeviceFile(obj, ws, null, req, domain); });
                 obj.app.get(url + 'devicefile.ashx', handleDeviceFile);
+                obj.app.post(url + 'devicefile.ashx', obj.bodyParser.urlencoded({ extended: false }), handleDeviceFile);
                 obj.app.get(url + 'agentdownload.ashx', handleAgentDownloadFile);
                 obj.app.get(url + 'logo.png', handleLogoRequest);
                 obj.app.get(url + 'loginlogo.png', handleLoginLogoRequest);
@@ -7289,7 +7686,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                 obj.app.get(url + 'sharing', handleSharingRequest);
                 obj.app.ws(url + 'agenttransfer.ashx', handleAgentFileTransfer); // Setup agent to/from server file transfer handler
                 obj.app.ws(url + 'meshrelay.ashx', function (ws, req) {
-                    PerformWSSessionAuth(ws, req, true, function (ws1, req1, domain, user, cookie, authData) {
+                    PerformWSRelayAuth(ws, req, true, function (ws1, req1, domain, user, cookie, authData) {
                         if (((parent.config.settings.desktopmultiplex === true) || (domain.desktopmultiplex === true)) && (req.query.p == 2)) {
                             obj.meshDesktopMultiplexHandler.CreateMeshRelay(obj, ws1, req1, domain, user, cookie); // Desktop multiplexor 1-to-n
                         } else {
@@ -7299,7 +7696,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                 });
                 if (obj.args.wanonly != true) { // If the server is not in WAN mode, allow server relayed connections.
                     obj.app.ws(url + 'localrelay.ashx', function (ws, req) {
-                        PerformWSSessionAuth(ws, req, true, function (ws1, req1, domain, user, cookie, authData) {
+                        PerformWSRelayAuth(ws, req, true, function (ws1, req1, domain, user, cookie, authData) {
                             if ((user == null) || (cookie == null)) {
                                 try { ws1.close(); } catch (ex) { }
                             } else {
@@ -7365,12 +7762,12 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                         try { require('./apprelays.js').CreateSshRelay(obj, obj.db, ws, req, obj.args, domain); } catch (ex) { console.log(ex); }
                     });
                     obj.app.ws(url + 'sshterminalrelay.ashx', function (ws, req) {
-                        PerformWSSessionAuth(ws, req, true, function (ws1, req1, domain, user, cookie, authData) {
+                        PerformWSRelayAuth(ws, req, true, function (ws1, req1, domain, user, cookie, authData) {
                             require('./apprelays.js').CreateSshTerminalRelay(obj, obj.db, ws1, req1, domain, user, cookie, obj.args);
                         });
                     });
                     obj.app.ws(url + 'sshfilesrelay.ashx', function (ws, req) {
-                        PerformWSSessionAuth(ws, req, true, function (ws1, req1, domain, user, cookie, authData) {
+                        PerformWSRelayAuth(ws, req, true, function (ws1, req1, domain, user, cookie, authData) {
                             require('./apprelays.js').CreateSshFilesRelay(obj, obj.db, ws1, req1, domain, user, cookie, obj.args);
                         });
                     });
@@ -7483,12 +7880,27 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                             var domain = getDomain(req);
                             if (domain.passport == null) { next(); return; }
                             if (req.session && req.session.userid) { next(); return; } // already logged in so dont authenticate just carry on
+                            if (typeof req.query.error == 'string') { // The identity provider refused the login, for example when the user has no application role assigned.
+                                parent.authLog('oidcCallback', `OIDC: LOGIN FAILED: Identity provider returned an error: ${req.query.error}${(typeof req.query.error_description == 'string') ? ' - ' + req.query.error_description : ''}`);
+                                req.session.loginmode = 1;
+                                req.session.messageid = 111; // Access denied.
+                                res.redirect(domain.url);
+                                return;
+                            }
                             if (req.session && req.session['oidc-' + domain.id]) { // we have a request to login so do authenticate
                                 domain.passport.authenticate(`oidc-${domain.id}`, { failureRedirect: domain.url, failureFlash: true })(req, res, next);
                             } else { // no idea so carry on
                                 next(); return;
                             }
-                        }, handleStrategyLogin);
+                        }, handleStrategyLogin, function (err, req, res, next) { // Show the login page instead of an internal error page when the login could not be completed.
+                            var domain = getDomain(req);
+                            parent.authLog('oidcCallback', `OIDC: LOGIN FAILED: ${(err != null) ? (err.message ? err.message : err) : 'Unknown error'}`);
+                            parent.debug('error', `OIDC: LOGIN FAILED: ${(err != null) ? (err.stack ? err.stack : err) : 'Unknown error'}`);
+                            if ((domain == null) || (res.headersSent === true)) { next(err); return; }
+                            req.session.loginmode = 1;
+                            req.session.messageid = 111; // Access denied.
+                            res.redirect(domain.url);
+                        });
                     }
 
                     // Generic SAML
@@ -7496,9 +7908,11 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                         obj.app.get(url + 'auth-saml', function (req, res, next) {
                             var domain = getDomain(req);
                             if (domain.passport == null) { next(); return; }
-                            //set RelayState when queries are passed
-                            if (Object.keys(req.query).length != 0){
-                                req.query.RelayState = encodeURIComponent(`${req.protocol}://${req.hostname}${req.originalUrl}`.replace('auth-saml/',''))
+                            // Carry the login page arguments through the IdP round trip, handleStrategyLogin only accepts our own root URL back
+                            if (Object.keys(req.query).length != 0) {
+                                const target = new URL(obj.generateBaseURL(domain, req));
+                                for (var i in req.query) { if ((i != 'RelayState') && (typeof req.query[i] == 'string')) { target.searchParams.set(i, req.query[i]); } }
+                                req.query.RelayState = encodeURIComponent(target.href);
                             }
                             domain.passport.authenticate('saml-' + domain.id, { failureRedirect: domain.url, failureFlash: true })(req, res, next);
                         });
@@ -7749,7 +8163,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
 
                     // Setup mesh relay on alternative agent-only port
                     obj.agentapp.ws(url + 'meshrelay.ashx', function (ws, req) {
-                        PerformWSSessionAuth(ws, req, true, function (ws1, req1, domain, user, cookie, authData) {
+                        PerformWSRelayAuth(ws, req, true, function (ws1, req1, domain, user, cookie, authData) {
                             if (((parent.config.settings.desktopmultiplex === true) || (domain.desktopmultiplex === true)) && (req.query.p == 2)) {
                                 obj.meshDesktopMultiplexHandler.CreateMeshRelay(obj, ws1, req1, domain, user, cookie); // Desktop multiplexor 1-to-n
                             } else {
@@ -7815,6 +8229,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
 
                             // Check that all the required arguments are present
                             if ((req.session.userid == null) || (req.session.x == null) || (req.query.n == null) || (req.query.p == null) || (parent.webserver.destroyedSessions[webSessionId] != null) || ((req.query.appid != 1) && (req.query.appid != 2))) { res.redirect('/'); return; }
+                            if ((domain == null) || obj.force2factorPending(domain, obj.users[userid], req)) { res.redirect('/'); return; } // 2FA setup is still required for this account
                         } else if (urlCookie.r == 8) {
                             // This is a guest user, figure out what our web relay will be.
                             userid = urlCookie.userid;
@@ -7952,9 +8367,20 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                 var domain = getDomain(req);
                 // Serve theme pack files if domain has a theme pack configured
                 if (domain && domain.themepack) {
-                    var themeFilePath = obj.path.join(obj.parent.datapath, 'theme-pack', domain.themepack, 'public', req.path);
-                    // Prevent directory traversal
-                    if (themeFilePath.indexOf('..') >= 0) return next();
+                    // Keep theme pack names as a single folder under theme-pack
+                    if ((typeof domain.themepack !== 'string') || (domain.themepack.indexOf('..') >= 0) || (domain.themepack.indexOf('/') >= 0) || (domain.themepack.indexOf('\\') >= 0)) { return next(); }
+
+                    var themePublicRoot = obj.path.resolve(obj.parent.datapath, 'theme-pack', domain.themepack, 'public');
+                    var requestPath = (typeof req.path === 'string') ? req.path : '';
+                    while ((requestPath.length > 0) && ((requestPath.charAt(0) === '/') || (requestPath.charAt(0) === '\\'))) { requestPath = requestPath.slice(1); }
+
+                    // Resolve the requested file and keep it inside the theme public folder
+                    var themeFilePath = obj.path.resolve(themePublicRoot, requestPath);
+                    var themePublicRootCmp = isWindowsPlatform ? themePublicRoot.toLowerCase() : themePublicRoot;
+                    var themeFilePathCmp = isWindowsPlatform ? themeFilePath.toLowerCase() : themeFilePath;
+                    if ((themePublicRootCmp.length > 1) && themePublicRootCmp.endsWith(obj.path.sep)) { themePublicRootCmp = themePublicRootCmp.slice(0, -1); }
+                    if ((themeFilePathCmp.length > 1) && themeFilePathCmp.endsWith(obj.path.sep)) { themeFilePathCmp = themeFilePathCmp.slice(0, -1); }
+                    if ((themeFilePathCmp !== themePublicRootCmp) && (themeFilePathCmp.startsWith(themePublicRootCmp + obj.path.sep) === false)) { return next(); }
 
                     obj.fs.stat(themeFilePath, function (err, stats) {
                         if (err || !stats.isFile()) return next();
@@ -8055,7 +8481,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             const TwitterStrategy = require('passport-twitter');
             let options = { consumerKey: domain.authstrategies.twitter.clientid, consumerSecret: domain.authstrategies.twitter.clientsecret };
             if (typeof domain.authstrategies.twitter.callbackurl == 'string') { options.callbackURL = domain.authstrategies.twitter.callbackurl; } else { options.callbackURL = url + 'auth-twitter-callback'; }
-            parent.authLog('setupDomainAuthStrategy', 'Adding Twitter SSO with options: ' + JSON.stringify(options));
+            parent.authLog('setupDomainAuthStrategy', 'Adding Twitter SSO with options: ' + obj.common.StringifyRedacted(options));
             passport.use('twitter-' + domain.id, new TwitterStrategy(options,
                 function (token, tokenSecret, profile, cb) {
                     parent.authLog('setupDomainAuthStrategy', 'Twitter profile: ' + JSON.stringify(profile));
@@ -8072,7 +8498,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             const GoogleStrategy = require('passport-google-oauth20');
             let options = { clientID: domain.authstrategies.google.clientid, clientSecret: domain.authstrategies.google.clientsecret };
             if (typeof domain.authstrategies.google.callbackurl == 'string') { options.callbackURL = domain.authstrategies.google.callbackurl; } else { options.callbackURL = url + 'auth-google-callback'; }
-            parent.authLog('setupDomainAuthStrategy', 'Adding Google SSO with options: ' + JSON.stringify(options));
+            parent.authLog('setupDomainAuthStrategy', 'Adding Google SSO with options: ' + obj.common.StringifyRedacted(options));
             passport.use('google-' + domain.id, new GoogleStrategy(options,
                 function (token, tokenSecret, profile, cb) {
                     parent.authLog('setupDomainAuthStrategy', 'Google profile: ' + JSON.stringify(profile));
@@ -8094,7 +8520,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             if (typeof domain.authstrategies.github.tokenurl == 'string') { options.tokenURL = domain.authstrategies.github.tokenurl; }
             if (typeof domain.authstrategies.github.userprofileurl == 'string') { options.userProfileURL = domain.authstrategies.github.userprofileurl; }
             if (typeof domain.authstrategies.github.useremailurl == 'string') { options.userEmailURL = domain.authstrategies.github.useremailurl; }
-            parent.authLog('setupDomainAuthStrategy', 'Adding Github SSO with options: ' + JSON.stringify(options));
+            parent.authLog('setupDomainAuthStrategy', 'Adding Github SSO with options: ' + obj.common.StringifyRedacted(options));
             passport.use('github-' + domain.id, new GitHubStrategy(options,
                 function (token, tokenSecret, profile, cb) {
                     parent.authLog('setupDomainAuthStrategy', 'Github profile: ' + JSON.stringify(profile));
@@ -8111,7 +8537,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             const AzureOAuth2Strategy = require('passport-azure-oauth2');
             let options = { clientID: domain.authstrategies.azure.clientid, clientSecret: domain.authstrategies.azure.clientsecret, tenant: domain.authstrategies.azure.tenantid };
             if (typeof domain.authstrategies.azure.callbackurl == 'string') { options.callbackURL = domain.authstrategies.azure.callbackurl; } else { options.callbackURL = url + 'auth-azure-callback'; }
-            parent.authLog('setupDomainAuthStrategy', 'Adding Azure SSO with options: ' + JSON.stringify(options));
+            parent.authLog('setupDomainAuthStrategy', 'Adding Azure SSO with options: ' + obj.common.StringifyRedacted(options));
             passport.use('azure-' + domain.id, new AzureOAuth2Strategy(options,
                 function (accessToken, refreshtoken, params, profile, done) {
                     var userex = null;
@@ -8142,6 +8568,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                     if (typeof domain.authstrategies.saml.callbackurl == 'string') { options.callbackUrl = domain.authstrategies.saml.callbackurl; } else { options.callbackUrl = url + 'auth-saml-callback'; }
                     if (domain.authstrategies.saml.disablerequestedauthncontext != null) { options.disableRequestedAuthnContext = domain.authstrategies.saml.disablerequestedauthncontext; }
                     if (typeof domain.authstrategies.saml.entityid == 'string') { options.issuer = domain.authstrategies.saml.entityid; }
+                    if (typeof domain.authstrategies.saml.acceptedClockSkewMs == 'number') { options.acceptedClockSkewMs = domain.authstrategies.saml.acceptedClockSkewMs; }
+                    if (typeof domain.authstrategies.saml.maxAssertionAgeMs == 'number') { options.maxAssertionAgeMs = domain.authstrategies.saml.maxAssertionAgeMs; }
                     parent.authLog('setupDomainAuthStrategy', 'Adding SAML SSO with options: ' + JSON.stringify(options));
                     options.cert = cert.toString().split('-----BEGIN CERTIFICATE-----').join('').split('-----END CERTIFICATE-----').join('');
                     const SamlStrategy = require('passport-saml').Strategy;
@@ -8247,7 +8675,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             if (!obj.common.validateString(strategy.issuer.issuer)) {
                 if (!preset) {
                     let error = new Error('OIDC: Missing issuer URI.');
-                    parent.authLog('error', `${error.message} STRATEGY: ${JSON.stringify(strategy)}`);
+                    parent.authLog('error', `${error.message} STRATEGY: ${obj.common.StringifyRedacted(strategy)}`);
                     throw error;
                 } else {
                     strategy.issuer.issuer = presetIssuer
@@ -8287,14 +8715,26 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                 strategy.obj.openidClient.custom.setHttpOptionsDefaults({ agent: obj.httpsProxyAgent });
             }
             // Discover additional information if available, use endpoints from config if present
-            let issuer
-            try {
-                parent.authLog('setupDomainAuthStrategy', `OIDC: Discovering Issuer Endpoints: ${strategy.issuer.issuer}`);
-                issuer = await strategy.obj.openidClient.Issuer.discover(strategy.issuer.issuer);
-            } catch (err) {
-                let error = new Error('OIDC: Discovery failed.', { cause: err });
-                parent.authLog('setupDomainAuthStrategy', `ERROR: ${JSON.stringify(error)} ISSUER_URI: ${strategy.issuer.issuer}`);
-                throw error
+            let issuer;
+            let attempts = 0;
+            const maxAttempts = 3;
+            while (attempts < maxAttempts) {
+                try {
+                    parent.authLog('setupDomainAuthStrategy', `OIDC: Discovering Issuer Endpoints: ${strategy.issuer.issuer} (Attempt ${attempts + 1}/${maxAttempts})`);
+                    issuer = await strategy.obj.openidClient.Issuer.discover(strategy.issuer.issuer);
+                    break; // Success!
+                } catch (err) {
+                    attempts++;
+                    if (attempts < maxAttempts) {
+                        parent.authLog('setupDomainAuthStrategy', `OIDC: Discovery failed. Retrying in 5 seconds... Error: ${err.message}`);
+                        console.log(`OIDC: Discovery failed. Retrying in 5 seconds... Error: ${err.message}`);
+                        await new Promise(resolve => setTimeout(resolve, 5000));
+                    } else {
+                        parent.authLog('setupDomainAuthStrategy', `OIDC: Discovery failed after ${maxAttempts} attempts. OIDC will be disabled for this domain. Error: ${err.message} ISSUER_URI: ${strategy.issuer.issuer}`);
+                        parent.addServerWarning(`OIDC: Discovery failed. OIDC has been disabled for this domain. Error: ${err.message}`);
+                        return authStrategyFlags;
+                    }
+                }
             }
             if (Object.keys(strategy.issuer).length > 1) {
                 parent.authLog('setupDomainAuthStrategy', `OIDC: Adding Issuer Metadata: ${JSON.stringify(strategy.issuer)}`);
@@ -8352,7 +8792,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             // Setup strategy and save configs for later
             passport.use('oidc-' + domain.id, new strategy.obj.openidClient.Strategy(strategy.options, oidcCallback));
             parent.config.domains[domain.id].authstrategies.oidc = strategy;
-            parent.debug('verbose', 'OIDC: Saved Configuration: ' + JSON.stringify(strategy));
+            parent.debug('verbose', 'OIDC: Saved Configuration: ' + obj.common.StringifyRedacted(strategy));
             if (preset) { parent.authLog('setupDomainAuthStrategy', 'OIDC: ' + preset.toUpperCase() + ': Setup Complete'); }
             else { parent.authLog('setupDomainAuthStrategy', 'OIDC: Setup Complete'); }
 
@@ -8380,7 +8820,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                         if (Object.hasOwn(strategy, key)) {
                             if (strategy[type][value] && obj.common.validateString(strategy[type][value])) {
                                 let error = new Error('OIDC: OLD CONFIG: Config conflict, new config overrides old config');
-                                parent.authLog('migrateOldConfigs', `${JSON.stringify(error)} OLD CONFIG: ${key}: ${strategy[key]} NEW CONFIG: ${value}:${strategy[type][value]}`);
+                                parent.authLog('migrateOldConfigs', `${error.message} OLD CONFIG: ${key} NEW CONFIG: ${type}.${value}`);
                             } else {
                                 parent.authLog('migrateOldConfigs', `OIDC: OLD CONFIG: Moving old config to new location. strategy.${key} => strategy.${type}.${value}`);
                                 strategy[type][value] = strategy[key];
@@ -8487,12 +8927,13 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
 
                 // Setup end session endpoint
                 try {
-                    strategy.issuer.end_session_endpoint = strategy.obj.client.endSessionUrl({ 'id_token_hint': tokenset })
-                    parent.authLog('oidcCallback', `OIDC: Discovered end_session_endpoint: ${strategy.issuer.end_session_endpoint}`);
+                    // Kept per login, the id_token hint belongs to this user only
+                    user.oidcLogoutUrl = strategy.obj.client.endSessionUrl({ 'id_token_hint': tokenset, 'post_logout_redirect_uri': strategy.client.post_logout_redirect_uri || undefined });
+                    parent.authLog('oidcCallback', 'OIDC: Discovered end_session_endpoint.');
                 } catch (err) {
                     let error = new Error('OIDC: Discovering end_session_endpoint failed. Using Default.', { cause: err });
                     strategy.issuer.end_session_endpoint = strategy.issuer.issuer + '/logout';
-                    parent.debug('error', `${error.message} end_session_endpoint: ${strategy.issuer.end_session_endpoint} post_logout_redirect_uri: ${strategy.client.post_logout_redirect_uri} TOKENSET: ${JSON.stringify(tokenset)}`);
+                    parent.debug('error', `${error.message} end_session_endpoint: ${strategy.issuer.end_session_endpoint} post_logout_redirect_uri: ${strategy.client.post_logout_redirect_uri}`);
                     parent.authLog('oidcCallback', error.message);
                 }
 
@@ -8501,25 +8942,32 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                     if((Array.isArray(strategy.custom.authorities) && strategy.custom.authorities.filter(x => x.trim().length > 0).length > 0) == false || strategy.custom.authorities.includes('groups')) { 
                         getGroups(user.preset, tokenset).then((groups) => {
                             user = Object.assign(user, { 'groups': groups });
-							
-							if(strategy.custom.authorities.includes('roles')){
-		                        if(user.roles){
-		                            if(!strategy.custom.authorities.includes('groups')){
-		                                user.groups = user.roles;
-		                            } else {
-		                                user.groups = (user.groups || []).concat(user.roles);
-		                            }
-		                        }
+							if(strategy.custom.authorities && strategy.custom.authorities.includes('roles')){
+                                // Check also for roles
+		                        user.groups = (user.groups || []).concat(user.roles || []);
 		                    }
-		                    parent.authLog('oidcCallback',`OIDC: USER GROUPS/ROLES: ${JSON.stringify(user)}`);
+		                    parent.authLog('oidcCallback',`OIDC: USER GROUPS/ROLES: ${JSON.stringify({ groups: user.groups, roles: user.roles })}`);
 		                    done(null, user);
                         }).catch((err) => {
                             let error = new Error('OIDC: GROUPS: No groups found due to error:', { cause: err });
                             parent.debug('error', `${JSON.stringify(error)}`);
                             parent.authLog('oidcCallback', error.message);
-                            user.groups = [];
+                            // Keep the roles from the token when they are requested, the group API is not the only source of authorities.
+                            user.groups = (strategy.custom.authorities && strategy.custom.authorities.includes('roles') && user.roles) ? user.roles : [];
                             done(null, user);
                         });
+
+                    } else if (Array.isArray(strategy.custom.authorities) && strategy.custom.authorities.includes('roles')) {
+                        // Only roles are requested
+                        if (user.roles) {
+                            user.groups = user.roles;
+                        }
+                        parent.authLog('oidcCallback', `OIDC: USER ROLES: ${JSON.stringify(user.roles)}`);
+                        done(null, user);
+                    } else {
+                        // No group or role source is configured, continue with no authorities.
+                        parent.authLog('oidcCallback', `OIDC: No groups or roles requested for user: "${user.sid}"`);
+                        done(null, user);
                     }
                 } else {
                     done(null, user);
@@ -8542,15 +8990,17 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                             res.on('end', () => {
                                 if (res.statusCode < 200 || res.statusCode >= 300) {
                                     let error = new Error('OIDC: GROUPS: Bad response code from API, statusCode: ' + res.statusCode);
-                                    parent.authLog('getGroups', `ERROR: ${error.message} URL: ${url} OPTIONS: ${JSON.stringify(options)}`);
+                                    parent.authLog('getGroups', `ERROR: ${error.message} URL: ${url}`);
                                     console.error(error);
                                     reject(error);
+                                    return;
                                 }
                                 if (data.length == 0) {
                                     let error = new Error('OIDC: GROUPS: Getting groups from API failed, request returned no data in response.');
-                                    parent.authLog('getGroups', `ERROR: ${error.message} URL: ${url} OPTIONS: ${JSON.stringify(options)}`);
+                                    parent.authLog('getGroups', `ERROR: ${error.message} URL: ${url}`);
                                     console.error(error);
                                     reject(error);
+                                    return;
                                 }
                                 try {
                                     if (Buffer.isBuffer(data[0])) {
@@ -8561,29 +9011,37 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                                     }
                                 } catch (err) {
                                     let error = new Error('OIDC: GROUPS: Getting groups from API failed. Error joining response data.', { cause: err });
-                                    parent.authLog('getGroups', `ERROR: ${error.message} URL: ${url} OPTIONS: ${JSON.stringify(options)}`);
+                                    parent.authLog('getGroups', `ERROR: ${error.message} URL: ${url}`);
                                     console.error(error);
                                     reject(error);
+                                    return;
+                                }
+                                try {
+                                    data = JSON.parse(data);
+                                    if ((data == null) || (typeof data != 'object')) { throw new Error('Not a JSON object'); }
+                                } catch (err) {
+                                    let error = new Error('OIDC: GROUPS: Getting groups from API failed. Response is not valid JSON.', { cause: err });
+                                    parent.authLog('getGroups', `ERROR: ${error.message} URL: ${url}`);
+                                    console.error(error);
+                                    reject(error);
+                                    return;
                                 }
                                 if (preset == 'azure') {
-                                    data = JSON.parse(data);
                                     if (data.error) {
                                         let error = new Error('OIDC: GROUPS: Getting groups from API failed. Error joining response data.', { cause: data.error });
-                                        parent.authLog('getGroups', `ERROR: ${error.message} URL: ${url} OPTIONS: ${JSON.stringify(options)}`);
+                                        parent.authLog('getGroups', `ERROR: ${error.message} URL: ${url}`);
                                         console.error(error);
                                         reject(error);
+                                        return;
                                     }
                                     data = data.value;
                                 }
                                 if (preset == 'google') {
-                                    data = data.split('\n');
-                                    data = data.join('');
-                                    data = JSON.parse(data);
                                     data = data.groups;
                                 }
                                 let groups = []
                                 for (var i in data) {
-                                    if (typeof data[i].displayName == 'string') {
+                                    if ((data[i] != null) && (typeof data[i].displayName == 'string')) {
                                         groups.push(data[i].displayName);
                                     }
                                 }
@@ -8599,7 +9057,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                         });
                         req.on('error', (err) => {
                             let error = new Error('OIDC: GROUPS: Request error.', { cause: err });
-                            parent.authLog('getGroups', `ERROR: ${error.message} URL: ${url} OPTIONS: ${JSON.stringify(options)}`);
+                            parent.authLog('getGroups', `ERROR: ${error.message} URL: ${url}`);
                             console.error(error);
                             reject(error);
                         });
@@ -8660,6 +9118,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         ws.on('message', function (data) {
             var command;
             try { command = JSON.parse(data.toString('utf8')); } catch (e) { return; }
+            if (command == null) return;
             if (obj.common.validateString(command.action, 3, 32) == false) return; // Action must be a string between 3 and 32 chars
 
             switch (command.action) {
@@ -8817,6 +9276,20 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         try { ws._socket.resume(); } catch (ex) { }
     }
 
+    // Device share guest cookies include these fields and are intended for relay sessions only.
+    // HTTP/HTTPS shares historically omitted cf; desktop/terminal/files shares include it.
+    function isDeviceShareGuestCookie(cookie) {
+        return ((cookie != null) && (cookie.nid != null) && (typeof cookie.r == 'number') && (typeof cookie.p == 'number') && (typeof cookie.gn == 'string'));
+    }
+
+    // Authenticates a relay session, refused while force2factor still requires this user to set up 2FA. control.ashx stays open so the account page can do that.
+    function PerformWSRelayAuth(ws, req, noAuthOk, func) {
+        PerformWSSessionAuth(ws, req, noAuthOk, function (ws1, req1, domain, user, cookie, authData) {
+            if (obj.force2factorPending(domain, user, req1)) { parent.debug('web', 'WSERROR: 2FA setup required.'); try { ws1.send(JSON.stringify({ action: 'close', cause: 'noauth', msg: '2farequired' })); ws1.close(); ws1._socket.resume(); } catch (e) { } return; } // Resume the paused socket so the close handshake completes
+            func(ws1, req1, domain, user, cookie, authData);
+        });
+    }
+
     // Authenticates a session and forwards
     function PerformWSSessionAuth(ws, req, noAuthOk, func) {
         // Check if the session expired
@@ -8824,8 +9297,27 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
             parent.debug('web', 'WSERROR: Session expired.'); try { ws.send(JSON.stringify({ action: 'close', cause: 'expired', msg: 'expired-1' })); ws.close(); } catch (e) { } return;
         }
 
-        // Check if this is a banned ip address
-        if (obj.checkAllowLogin(req) == false) { parent.debug('web', 'WSERROR: Banned connection.'); try { ws.send(JSON.stringify({ action: 'close', cause: 'banned', msg: 'banned-1' })); ws.close(); } catch (e) { } return; }
+        const blockingMode = parent.config.settings.maxinvalidlogin?.blocking || 'iprange';
+        
+        // Check if blocking mode is ip and this is a banned ip address
+        if (blockingMode !== 'username' && obj.checkAllowLogin(req) === false) { parent.debug('web', 'WSERROR: Banned connection.'); try { ws.send(JSON.stringify({ action: 'close', cause: 'banned', msg: 'banned-1' })); ws.close(); } catch (e) { } return; }
+        // Check if blocking mode is username and this is a banned username
+        if (blockingMode === 'username') {
+            let username = null;
+            if (req.query && req.query.user) {
+                username = req.query.user;
+                if (username.startsWith('~t:')) { tokenUser = username; }
+            } else if (req.headers && req.headers['x-meshauth']) {
+                try {
+                    username = Buffer.from(req.headers['x-meshauth'].split(',')[0], 'base64').toString();
+                } catch (e) {}
+            } else if (req.session) {
+                if (req.session.loginToken) { username = req.session.loginToken; }
+                if (req.session.userid) { username = req.session.userid.split('/')[2]; }
+            }
+            if(username && obj.checkAllowLogin(null, username) === false) { parent.debug('web', 'WSERROR: Locked user.'); try { ws.send(JSON.stringify({ action: 'close', cause: 'locked', msg: 'locked-1' })); ws.close(); } catch (e) { } return; }
+        }
+        
         try {
             // Hold this websocket until we are ready.
             ws._socket.pause();
@@ -8959,7 +9451,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                             // If not authenticated, close the websocket connection
                             parent.debug('web', 'ERR: Websocket bad user/pass auth');
                             //obj.parent.DispatchEvent(['*', 'server-users', 'user/' + domain.id + '/' + obj.args.user.toLowerCase()], obj, { action: 'authfail', userid: 'user/' + domain.id + '/' + obj.args.user.toLowerCase(), username: obj.args.user, domain: domain.id, msg: 'Invalid user login attempt from ' + req.clientIp });
-                            //obj.setbadLogin(req);
+                            //parent.debug('web', "Failed login for user:", req.query.user);
+                            obj.setbadLogin(req, req.query.user);
                             try { ws.send(JSON.stringify({ action: 'close', cause: 'noauth', msg: 'noauth-2a' })); ws.close(); } catch (e) { }
                         }
                     }
@@ -8971,12 +9464,10 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                 // This is a encrypted cookie authentication
                 var cookie = obj.parent.decodeCookie(req.query.auth, obj.parent.loginCookieEncryptionKey, 60); // Cookie with 1 hour timeout
                 if ((cookie == null) && (obj.parent.multiServer != null)) { cookie = obj.parent.decodeCookie(req.query.auth, obj.parent.serverKey, 60); } // Try the server key
-                if ((cookie != null) && (cookie.ip != null) && !checkCookieIp(cookie.ip, req.clientIp)) { // If the cookie if binded to an IP address, check here.
-                    parent.debug('web', 'ERR: Invalid cookie IP address, got \"' + cookie.ip + '\", expected \"' + cleanRemoteAddr(req.clientIp) + '\".');
-                    cookie = null;
-                }
+                if ((cookie != null) && (checkAuthCookie(cookie, req) == false)) { cookie = null; } // Check the IP and session binding
                 if ((cookie != null) && (cookie.userid != null) && (obj.users[cookie.userid]) && (cookie.domainid == domain.id) && (cookie.userid.split('/')[1] == domain.id)) {
                     // Valid cookie, we are authenticated. Cookie of format { userid: 'user//name', domain: '' }
+                    if ((cookie.x != null) && (req.session != null) && (req.session.x == null)) { req.session.x = cookie.x; } // Cookies issued over this connection stay bound to the same web session
                     func(ws, req, domain, obj.users[cookie.userid], cookie);
                     return;
                 } else if ((cookie != null) && (cookie.a === 3) && (typeof cookie.u == 'string') && (obj.users[cookie.u]) && (cookie.u.split('/')[1] == domain.id)) {
@@ -9078,6 +9569,10 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                             } else {
                                 req.session.userid = user._id;
                                 req.session.ip = req.clientIp;
+                                if ((loginOptions != null) && (loginOptions.tokenName != null) && (loginOptions.tokenUser != null)) {
+                                    req.session.tokenUser = loginOptions.tokenUser;
+                                    req.session.tokenName = loginOptions.tokenName;
+                                }
                                 setSessionRandom(req);
                                 func(ws, req, domain, user);
                             }
@@ -9090,6 +9585,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
                         } else {
                             // If not authenticated, close the websocket connection
                             parent.debug('web', 'ERR: Websocket bad user/pass auth');
+                            //parent.debug('web', "Failed login for user:", s[0]);
+                            obj.setbadLogin(req, s[0]);
                             try { ws.send(JSON.stringify({ action: 'close', cause: 'noauth', msg: 'noauth-2d' })); ws.close(); } catch (e) { }
                         }
                     }
@@ -9349,6 +9846,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         if ((user.removeRights & 0x00000100) != 0) { add += 0x00000100; } // Desktop View Only
         if ((user.removeRights & 0x00000200) != 0) { add += 0x00000200; } // No Terminal
         if ((user.removeRights & 0x00000400) != 0) { add += 0x00000400; } // No Files
+        if ((user.removeRights & 0x00400000) != 0) { add += 0x00400000; } // No Registry
+        if ((user.removeRights & 0x00800000) != 0) { add += 0x00800000; } // No Software
         if ((user.removeRights & 0x00000010) != 0) { substract += 0x00000010; } // No Console
         if ((user.removeRights & 0x00008000) != 0) { substract += 0x00008000; } // No Uninstall
         if ((user.removeRights & 0x00020000) != 0) { substract += 0x00020000; } // No Remote Command
@@ -9650,8 +10149,12 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
     obj.InvalidateNodeCache = function (user, mesh, nodeid) {
         if (user == null) { return; }
         
-        if (typeof user == 'string') { user = obj.users[user]; }
+        if (typeof user == 'string') { user = obj.users[user] || obj.userGroups[user]; }
         if (user == null) { return 0; }
+        if (user._id.startsWith('ugrp/')) {
+            for (var id in user.links) { if (id.startsWith('user/')) { obj.InvalidateNodeCache(id, mesh, nodeid); } }
+            return;
+        }
         var meshid;
         if (typeof mesh == 'string') { meshid = mesh; } else if ((typeof mesh == 'object') && (typeof mesh._id == 'string')) { meshid = mesh._id; };
         
@@ -10383,7 +10886,8 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         var removeKeys = ['duo_code', 'state']; // Keys to remove
         var s = req.url.indexOf('?');
         if (s == -1) {
-            if (req.body && req.body.urlargs) {
+            // The login forms post the page's own query string back, anything else could send the browser to another site
+            if (req.body && (typeof req.body.urlargs == 'string') && req.body.urlargs.startsWith('?')) {
                 return req.body.urlargs;
             }
             return '';
@@ -10444,39 +10948,129 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         if (typeof parent.config.settings.maxinvalidlogin.time != 'number') { parent.config.settings.maxinvalidlogin.time = 10; }
         if (typeof parent.config.settings.maxinvalidlogin.count != 'number') { parent.config.settings.maxinvalidlogin.count = 10; }
         if ((typeof parent.config.settings.maxinvalidlogin.coolofftime != 'number') || (parent.config.settings.maxinvalidlogin.coolofftime < 1)) { parent.config.settings.maxinvalidlogin.coolofftime = null; }
-    }
-    obj.setbadLogin = function (ip) { // Set an IP address that just did a bad login request
-        if (parent.config.settings.maxinvalidlogin === false) return;
-        if (typeof ip == 'object') { ip = ip.clientIp; }
-        if (parent.config.settings.maxinvalidlogin != null) {
-            if (typeof parent.config.settings.maxinvalidlogin.exclude == 'string') {
-                const excludeSplit = parent.config.settings.maxinvalidlogin.exclude.split(',');
-                for (var i in excludeSplit) { if (require('ipcheck').match(ip, excludeSplit[i])) return; }
-            } else if (Array.isArray(parent.config.settings.maxinvalidlogin.exclude)) {
-                for (var i in parent.config.settings.maxinvalidlogin.exclude) { if (require('ipcheck').match(ip, parent.config.settings.maxinvalidlogin.exclude[i])) return; }
+        if (typeof parent.config.settings.maxinvalidlogin.blocking != 'string') {
+            parent.config.settings.maxinvalidlogin.blocking = 'iprange';
+        } else {
+            parent.config.settings.maxinvalidlogin.blocking = parent.config.settings.maxinvalidlogin.blocking.toLowerCase();
+            if (['iprange', 'ip', 'username'].indexOf(parent.config.settings.maxinvalidlogin.blocking) < 0) {
+                parent.config.settings.maxinvalidlogin.blocking = 'iprange';
             }
         }
-        var splitip = ip.split('.');
-        if (splitip.length == 4) { ip = (splitip[0] + '.' + splitip[1] + '.' + splitip[2] + '.*'); }
-        if (++obj.badLoginTableLastClean > 100) { obj.cleanBadLoginTable(); }
-        if (typeof obj.badLoginTable[ip] == 'number') { if (obj.badLoginTable[ip] < Date.now()) { delete obj.badLoginTable[ip]; } else { return; } }  // Check cooloff period
-        if (obj.badLoginTable[ip] == null) { obj.badLoginTable[ip] = [Date.now()]; } else { obj.badLoginTable[ip].push(Date.now()); }
-        if ((obj.badLoginTable[ip].length >= parent.config.settings.maxinvalidlogin.count) && (parent.config.settings.maxinvalidlogin.coolofftime != null)) {
-            obj.badLoginTable[ip] = Date.now() + (parent.config.settings.maxinvalidlogin.coolofftime * 60000); // Move to cooloff period
-        }
     }
-    obj.checkAllowLogin = function (ip) { // Check if an IP address is allowed to login
+    function getBadLoginKey(ip, username) {
+        if (typeof ip === 'object' && ip != null) { ip = ip.clientIp; }
+
+        const mode = parent.config.settings.maxinvalidlogin?.blocking || 'iprange';
+
+        if (mode === 'username') {
+            return (typeof username === 'string' && username.length > 0) ? username.toLowerCase() : null;
+        }
+
+        if (mode === 'ip') { return ip; }
+        if (mode === 'iprange') {
+            const splitip = ip.split('.');
+            if (splitip.length === 4) { // Check if IP v4
+                return `${splitip[0]}.${splitip[1]}.${splitip[2]}.*`;
+            }
+            return ip;
+        }
+        return null; // Return null if mode is 'username'
+    }
+    obj.isKeyAllowed = function (key) {
+        if (!parent.config.settings.maxinvalidlogin || !key) return true;
+
+        const entry = obj.badLoginTable[key];
+    
+        if (entry == null) return true;
+
+        const now = Date.now();
+
+        // Check cooloff period (number timestamp)
+        if (typeof entry === 'number') {
+            if (entry < now) {
+                delete obj.badLoginTable[key];
+                return true;
+            }
+            return false;
+        }
+
+        // Check sliding window timestamps (array)
+        const cutoffTime = now - (parent.config.settings.maxinvalidlogin.time * 60000);
+        while (entry.length > 0 && entry[0] < cutoffTime) {
+            entry.shift();
+        }
+
+        if (entry.length === 0) {
+            delete obj.badLoginTable[key];
+            return true;
+        }
+
+        return entry.length < parent.config.settings.maxinvalidlogin.count;
+    };
+    obj.setbadLogin = function (ip, username) {
+        if (!parent.config.settings.maxinvalidlogin) return;
+
+        const rawIp = (typeof ip === 'object' && ip != null) ? ip.clientIp : ip;
+
+        // Check IP exclusion list (only applicable if a valid IP is present)
+        if (typeof rawIp === 'string' && parent.config.settings.maxinvalidlogin.exclude) {
+            const excludes = Array.isArray(parent.config.settings.maxinvalidlogin.exclude)
+                ? parent.config.settings.maxinvalidlogin.exclude
+                : parent.config.settings.maxinvalidlogin.exclude.split(',');
+
+            const ipcheck = require('ipcheck');
+            for (const pattern of excludes) {
+                if (ipcheck.match(rawIp, pattern.trim())) return;
+            }
+        }
+
+        // Resolve key based on configuration ('ip', 'iprange', or 'username')
+        const key = getBadLoginKey(ip, username);
+        if (!key) return;
+
+        // Periodic cleanup trigger
+        if (++obj.badLoginTableLastClean > 100) { 
+            obj.cleanBadLoginTable(); 
+        }
+
+        const now = Date.now();
+
+        // Check cooloff period
+        if (typeof obj.badLoginTable[key] === 'number') {
+            if (obj.badLoginTable[key] < now) { 
+                delete obj.badLoginTable[key]; 
+            } else { 
+                return; 
+            }
+        }
+
+        // Record bad attempt timestamp
+        if (obj.badLoginTable[key] == null) {
+            obj.badLoginTable[key] = [now];
+        } else {
+            obj.badLoginTable[key].push(now);
+        }
+
+        // Enter cooloff period if threshold reached
+        const maxCount = parent.config.settings.maxinvalidlogin.count;
+        const cooloff = parent.config.settings.maxinvalidlogin.coolofftime;
+        if (cooloff != null && obj.badLoginTable[key].length >= maxCount) {
+            obj.badLoginTable[key] = now + (cooloff * 60000);
+        }
+    };
+    obj.checkAllowLogin = function (ip, username) { // Check if a login key is allowed to login
         if (parent.config.settings.maxinvalidlogin === false) return true;
-        if (typeof ip == 'object') { ip = ip.clientIp; }
-        var splitip = ip.split('.');
-        if (splitip.length == 4) { ip = (splitip[0] + '.' + splitip[1] + '.' + splitip[2] + '.*'); } // If this is IPv4, keep only the 3 first
-        var cutoffTime = Date.now() - (parent.config.settings.maxinvalidlogin.time * 60000); // Time in minutes
-        var ipTable = obj.badLoginTable[ip];
-        if (ipTable == null) return true;
-        if (typeof ipTable == 'number') { if (obj.badLoginTable[ip] < Date.now()) { delete obj.badLoginTable[ip]; } else { return false; } } // Check cooloff period
-        while ((ipTable.length > 0) && (ipTable[0] < cutoffTime)) { ipTable.shift(); }
-        if (ipTable.length == 0) { delete obj.badLoginTable[ip]; return true; }
-        return (ipTable.length < parent.config.settings.maxinvalidlogin.count); // No more than x bad logins in x minutes
+
+        const mode = parent.config.settings.maxinvalidlogin?.blocking || 'iprange';
+        if (mode === 'username') {
+            if (typeof username === 'string' && username.length > 0) {
+                return obj.isKeyAllowed(username.toLowerCase());
+            }
+            return true;
+        }
+
+        const ipKey = getBadLoginKey(ip);
+        return obj.isKeyAllowed(ipKey); // No more than x bad logins in x minutes
     }
     obj.cleanBadLoginTable = function () { // Clean up the IP address login blockage table, we do this occasionaly.
         if (parent.config.settings.maxinvalidlogin === false) return;
@@ -10531,7 +11125,7 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         var cutoffTime = Date.now() - (parent.config.settings.maxinvalid2fa.time * 60000); // Time in minutes
         var ipTable = obj.bad2faTable[ip];
         if (ipTable == null) return true;
-        if (typeof ipTable == 'number') { if (obj.bad2faTable[ip] < Date.now()) { delete obj.bad2faTable[ip]; } else { return false; } } // Check cooloff period
+        if (typeof ipTable == 'number') { if (ipTable < Date.now()) { delete obj.bad2faTable[ip]; return true; } else { return false; } } // Check cooloff period
         while ((ipTable.length > 0) && (ipTable[0] < cutoffTime)) { ipTable.shift(); }
         if (ipTable.length == 0) { delete obj.bad2faTable[ip]; return true; }
         return (ipTable.length < parent.config.settings.maxinvalid2fa.count); // No more than x bad 2FAs in x minutes
@@ -10646,6 +11240,13 @@ module.exports.CreateWebServer = function (parent, db, args, certificates, doneF
         if (obj.args.cookieipcheck == 'strict') return (cookieip == ip); // 'strict' - Strict IP address checking, this can cause issues with HTTP proxies or load-balancers.
         if (require('ipcheck').match(cookieip, ip + '/24')) return true; // 'lax' - IP address need to be in the some range
         return (isPrivateAddress(cookieip) && isPrivateAddress(ip)); // 'lax' - If both IP addresses are private or loopback, accept it. This is needed because sometimes browsers will resolve IP addresses oddly on private networks.
+    }
+
+    // Check that a user authentication cookie can still be used from this request: the IP range it is bound to and the web session it was issued from
+    function checkAuthCookie(cookie, req) {
+        if ((cookie.ip != null) && !checkCookieIp(cookie.ip, req.clientIp)) { parent.debug('web', 'ERR: Invalid cookie IP address, got \"' + cookie.ip + '\", expected \"' + cleanRemoteAddr(req.clientIp) + '\".'); return false; }
+        if ((cookie.x != null) && (obj.destroyedSessions[cookie.userid + '/' + cookie.x] != null)) { parent.debug('web', 'ERR: Cookie issued to a session that has logged out.'); return false; }
+        return true;
     }
 
     // Takes a formating string like "this {{{a}}} is an {{{b}}} example" and fills the a and b with input o.a and o.b

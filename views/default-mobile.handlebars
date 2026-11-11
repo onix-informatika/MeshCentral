@@ -273,6 +273,26 @@
             margin-top: 1px;
         }
 
+        .fileIcon5 {
+            background: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAABVklEQVQ4T42Ty22DUBBFzW9PB3EJpoKYDpwKIiQ+YpW4grSQHRIgESqIO3A6CB3YHYQlCz65F/Gslwe2gzTCwNwzd2aetdU/rqIo7KZp7DiOz2q6dk+fpulG1/XPYRhshBuGYSVrbgIkcQ0RY6NCFgEUappWIFiVwpJ3PD+rkBlAqrqerLoUIR6CINhnWXaUIX8AC2IyamEb4lfZSdu2zgVwRSzmNUIQOwyUrTzi95bvRkCSJGvLso54IWwvLYezeIL4heK+770oig4jIM9zrmk3qZjIfbPvRZAQ86PGQ4JefqbMyjRN1/O8etrEt0qAg7NhGA5zRgAGs8Wdk+X1DiclV4iJO/hGgOyklqvPHED44fu+RyicVHB2QpItWlPFI2CawUkMEJBD13Ulpv0mVZ9VFq2NAKUNte2r4osDAWHvyiq/8LxX/0ByhdlRntyseOJuCQXkFwkT7PS0vyFtAAAAAElFTkSuQmCC);
+            height: 16px;
+            width: 16px;
+            cursor: pointer;
+            border: none;
+            float: left;
+            margin-top: 1px;
+        }
+
+        .fileIcon6 {
+            background: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAABCUlEQVQ4T6WT3Q2CMBSFLTAAbiAb4AhuIBvYBEJ40wkcQV/5SXAEN9ANdAPZwL5DwNOENm2xxoQmPLT3nq/3nAaymLnITP3CCqjr2m/bdkUI8ZMkudsumgC4sOu6IwQ7fL4iPAN0MEEaYBTf0BRabmSALNWaBijL8oTi/lcusHSN4zgSPSbgbYzNIGDDMKxUqOd5S0op42cSUBRFiOaHJBPSuK675o1VVb0MyEYEawUAJP3CGgfLXPq+j9I0vWoTjAFyC+p6jhstVLxSkGVZowH4BqPWGJU/n3XB5gUh0q8h/vOMCDAQAU4mEFTLJHeII1VsBQhQnudbx3EYhE9T+NXCL++22uy/8QNYGm0RH2Rb4gAAAABJRU5ErkJggg==);
+            height: 16px;
+            width: 16px;
+            cursor: pointer;
+            border: none;
+            float: left;
+            margin-top: 1px;
+        }
+
         .filelist {
             -moz-user-select: none;
             -khtml-user-select: none;
@@ -281,6 +301,32 @@
             cursor: default;
             -khtml-user-drag: element;
             clear: both;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        .filelistrow {
+            display: flex;
+            align-items: center;
+            width: 100%;
+        }
+
+        .filelistcontent {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .filelistname {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: clip;
+        }
+
+        .filelistmeta {
+            white-space: nowrap;
+            font-size: 0.85em;
+            color: #555;
         }
 
         .deviceNotifyDot {
@@ -909,6 +955,20 @@
                         <div id=p10html2></div>
                         <div id=p10html3 style="margin-left:8px"></div>
                     </div>
+                    <div id=p10registry style="overflow-y:scroll;position:absolute;top:55px;bottom:0px;width:100%;display:none">
+                        <div style="padding:8px;background:#C0C0C0">
+                            <input id=p18Connect value="Connect" onclick=connectRegistry() type="button" style="height:28px" />
+                            <input id=p18Disconnect value="Disconnect" onclick=connectRegistry() type="button" style="height:28px;display:none" />
+                            <input id=p18RefreshButton value="Refresh" onclick=p18refreshRegistry() type="button" style="height:28px" disabled="disabled" />
+                            <input id=p18FolderUp value="Up" onclick=p18folderup() type="button" style="height:28px" disabled="disabled" />
+                            <input id=p18GoToButton value="GoTo" onclick=p18openPathInput() type="button" style="height:28px" disabled="disabled" />
+                            <span class=textOverGray id=p18Status>Disconnected</span>
+                        </div>
+                        <div id=p18ConsoleMsg style="display:none;cursor:pointer;position:absolute;left:30px;top:95px;color:yellow;background-color:rgba(0,0,0,0.6);padding:10px;border-radius:5px" onclick=p18clearConsoleMsg()></div>
+                        <div id=p18subhead style="background-color:#E4E9E7;height:32px;line-height:28px;padding:2px 8px;display:none"><input id="p18currentpath" type="text" autocomplete="off" spellcheck="false" value="Root" style="width:100%;height:24px" onkeydown="if (event.key == 'Enter') return p18openPathInput()" /></div>
+                        <div id=p18RootsInfo style="padding:8px;color:#444">Connect to load the first read-only Registry slice from the agent.</div>
+                        <div id=p18roots style="margin:8px"></div>
+                    </div>
                     <img id="deskkeybutton1" src="images/mobile-desk-exit.png" class="deskButton" style="top:10px;display:none" onclick="exitButton()" />
                     <img id="deskkeybutton3a" src="images/mobile-desk-menu-open.png" class="deskButton" style="top:60px;display:none" onclick="toggleMenu(false)" />
                     <img id="deskkeybutton3b" src="images/mobile-desk-menu-close.png" class="deskButton" style="top:60px;display:none" onclick="toggleMenu(true)" />
@@ -1231,6 +1291,7 @@
                             </td>
                             <td style="width:100px">
                                 <select id="d7framelimiter" style="float:right;width:200px" dir="rtl">
+                                    <option value=20>Very fast</option>
                                     <option selected=selected value=50>Fast</option>
                                     <option value=100>Medium</option>
                                     <option value=400>Slow</option>
@@ -1373,6 +1434,7 @@
         var p11DeskConsoleMsgTimer = null;
         var p12TermConsoleMsgTimer = null;
         var p13FilesConsoleMsgTimer = null;
+        var p18ConsoleMsgTimer = null;
 
         // Check if WebP is supported
         var webpSupport = false;
@@ -1468,7 +1530,8 @@
                 // Fetch list of meshes, nodes, files
                 meshserver.send({ action: 'usergroups' });
                 meshserver.send({ action: 'meshes' });
-                meshserver.send({ action: 'nodes', skip: (devicePagingState == null) ? 0 : devicePagingState.skip });
+                deviceServerFilter = getDeviceServerFilter();
+                meshserver.send({ action: 'nodes', skip: (devicePagingState == null) ? 0 : devicePagingState.skip, filter: deviceServerFilter });
                 meshserver.send({ action: 'files' });
                 authCookieRenewTimer = setInterval(function () { meshserver.send({ action: 'authcookie' }); }, 1800000); // Request a cookie refresh every 30 minutes.
             }
@@ -1585,6 +1648,8 @@
                     QH('p3userName', userinfo.name);
                     //updateSiteAdmin();
                     if (serverinfo != null) updateSelf();
+                    // The server only accepts account security commands until a second factor is set up, so start there
+                    if ((features & 0x00040000) && !((userinfo.otpsecret == 1) || (userinfo.otphkeys > 0) || (userinfo.otpkeys > 0) || (userinfo.otpduo > 0) || (userinfo.otpdev > 0) || ((features & 0x00800000) && (userinfo.otpekey == 1))) && (xxcurrentView != 3)) { go(3); setDialogMode(2, "Account Security", 1, null, "Unable to access this feature until two-factor authentication is enabled. This is required for extra security. Go to the \"My Account\" and look at the \"Account Security\" section."); }
                     break;
                 }
                 case 'users': {
@@ -1709,9 +1774,11 @@
                             } else if ((message.type == 'userSessions') && (currentNode != null) && (currentNode._id == message.nodeid) && (desktop == null)) {
                                 // Got list of user sessions
                                 var userSessions = [];
+                                var userSessionTag = parseInt(message.tag);
+                                if (isNaN(userSessionTag)) { userSessionTag = 0; }
                                 if (message.data != null) { for (var i in message.data) { if ((message.data[i].State == 'Active') || (message.data[i].StationName == 'Console') || (debugmode == 3)) { userSessions.push(message.data[i]); } } }
-                                if (userSessions.length == 0) { connectDesktop(null, 1, null, message.tag); } // No active sessions, do a normal connection.
-                                else if (userSessions.length == 1) { connectDesktop(null, 1, userSessions[0].SessionId, message.tag); } // One active session, connect to it
+                                if (userSessions.length == 0) { connectDesktop(null, 1, null, userSessionTag); } // No active sessions, do a normal connection.
+                                else if (userSessions.length == 1) { var userSessionId = parseInt(userSessions[0].SessionId); connectDesktop(null, 1, isNaN(userSessionId) ? null : userSessionId, userSessionTag); } // One active session, connect to it
                                 else {
                                     var x = '';
                                     var sortBy = "{{{userSessionsSort}}}";
@@ -1725,8 +1792,10 @@
                                         });
                                     }
                                     for (var i in userSessions) {
-                                        x += '<div style="text-align:left;cursor:pointer;background-color:gray;margin:5px;padding:5px;border-radius:5px" onclick=connectDesktop(event,1,' + userSessions[i].SessionId + ',' + message.tag + ')>' + userSessions[i].State + ', ' + userSessions[i].StationName;
-                                        if (userSessions[i].Username) { if (userSessions[i].Domain) { x += ' - ' + userSessions[i].Domain + '/' + userSessions[i].Username; } else { x += ' - ' + userSessions[i].Username; } }
+                                        var userSessionId = parseInt(userSessions[i].SessionId);
+                                        if (isNaN(userSessionId)) continue;
+                                        x += '<div style="text-align:left;cursor:pointer;background-color:gray;margin:5px;padding:5px;border-radius:5px" onclick=connectDesktop(event,1,' + userSessionId + ',' + userSessionTag + ')>' + EscapeHtml(userSessions[i].State) + ', ' + EscapeHtml(userSessions[i].StationName);
+                                        if (userSessions[i].Username) { if (userSessions[i].Domain) { x += ' - ' + EscapeHtml(userSessions[i].Domain) + '/' + EscapeHtml(userSessions[i].Username); } else { x += ' - ' + EscapeHtml(userSessions[i].Username); } }
                                         x += '</div>';
                                     }
                                     QH('p11DeskSessionSelector', x);
@@ -2099,7 +2168,9 @@
                                     if (message.event.node.intelamt.warn != null) { node.intelamt.warn = message.event.node.intelamt.warn; } else { delete node.intelamt.warn; }
                                 }
                                 if (message.event.node.av != null) { node.av = message.event.node.av; }
+                                if (message.event.node.lsc != null) { node.lsc = message.event.node.lsc; }
                                 if (message.event.node.wsc != null) { node.wsc = message.event.node.wsc; }
+                                if (message.event.node.pr != null) { node.pr = message.event.node.pr; }
                                 if (message.event.node.defender != null) { node.defender = message.event.node.defender; }
                                 node.namel = node.name.toLowerCase();
                                 if (node.rname) { node.rnamel = node.rname.toLowerCase(); } else { node.rnamel = node.namel; }
@@ -2348,7 +2419,12 @@
         function updateFooterMenu(options) {
             while (options != null && options.length < 3) { options.push({ n: '' }); }
             var x = '', prev = '';
-            if (options != null) { for (var i in options) { x += '<td style="cursor:pointer' + ((prev == '') ? '' : ';border-left:solid 1px white') + '" onclick="' + options[i].f + '">' + options[i].n; prev = options[i].n; } }
+            if (options != null) {
+                for (var i in options) {
+                    x += '<td style="cursor:pointer' + ((prev == '') ? '' : ';border-left:solid 1px white') + '" onclick="' + options[i].f + '"><div title="' + EscapeHtml(options[i].n) + '" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px">' + options[i].n + '</div>';
+                    prev = options[i].n;
+                }
+            }
             QH('footerMenu', '<tr>' + x);
         }
 
@@ -2499,10 +2575,13 @@
         }
 
         function account_showLocalizationSettingsEx() {
-            // Set user language
-            var lang = Q('d2langselect').value;
-            if ((lang == '*') && (userinfo.lang == null)) { lang = userinfo.lang; }
-            if (lang != userinfo.lang) { meshserver.send({ action: 'changelang', lang: lang }); }
+            // Set user language, the dropdown only exists when the server has translated pages
+            var langSelect = Q('d2langselect');
+            if (langSelect != null) {
+                var lang = langSelect.value;
+                if ((lang == '*') && (userinfo.lang == null)) { lang = userinfo.lang; }
+                if (lang != userinfo.lang) { meshserver.send({ action: 'changelang', lang: lang }); }
+            }
 
             // Set date localization
             var n = getstore('loctag', 0);
@@ -2900,7 +2979,7 @@
                     var publiclink = '';
                     if (publicfolder) { publiclink = ' (<a style=cursor:pointer onclick=\'p5showPublicLink("' + publicPath + '/' + f.nx + '")\'>' + "Link" + '</a>)'; }
                     if (f.s > 0) { link = '<a rel=\"noreferrer noopener\" target=\"_blank\" href=\"downloadfile.ashx?link=' + encodeURIComponent(filetreelinkpath + '/' + f.nx) + '\">' + shortname + '</a>' + publiclink; }
-                    h = '<div class=filelist file=3><input file=3 style=float:left name=fc class=fcb type=checkbox onchange=p5setActions() value=\'' + f.nx + '\'>&nbsp;<span style=float:right;padding-right:4px>' + EscapeHtml(fsize) + '</span><span title="' + shortname + '"><div class=fileIcon' + f.t + '></div>' + link + '</span></div>';
+                    h = '<div class=filelist file=3><input file=3 style=float:left name=fc class=fcb type=checkbox onchange=p5setActions() value=\'' + EscapeHtml(f.nx) + '\'>&nbsp;<span style=float:right;padding-right:4px>' + EscapeHtml(fsize) + '</span><span title="' + shortname + '"><div class=fileIcon' + f.t + '></div>' + link + '</span></div>';
                 }
 
                 if (f.t < 3) { html1 += h; } else { html2 += h; }
@@ -2934,11 +3013,11 @@
         }
 
         function getNetworkSpeed(bitsPerSecond) {
-            if (bitsPerSecond <= 0) return "0 bps";
-            if (bitsPerSecond < 1000) return format("{0} bps", bitsPerSecond);
-            if (bitsPerSecond < 1000000) return format("{0} Kbps", Math.round(bitsPerSecond / 1000));
-            if (bitsPerSecond < 1000000000) return format("{0} Mbps", Math.round(bitsPerSecond / 1000000));
-            return format("{0} Gbps", (bitsPerSecond / 1000000000).toFixed(1));
+            if (bitsPerSecond <= 0) return '0 bps';
+            if (bitsPerSecond < 1000) return format('{0} bps', bitsPerSecond);
+            if (bitsPerSecond < 1000000) return format('{0} Kbps', Math.round(bitsPerSecond / 1000));
+            if (bitsPerSecond < 1000000000) return format('{0} Mbps', Math.round(bitsPerSecond / 1000000));
+            return format('{0} Gbps', (bitsPerSecond / 1000000000).toFixed(1));
         }
 
         function p5getQuotabar(f) {
@@ -3002,7 +3081,7 @@
         function p5copyFile(cut) { var checkboxes = document.getElementsByName('fc'); p5clipboard = []; p5clipboardCut = cut, p5clipboardFolder = Clone(filetreelocation); for (var i = 0; i < checkboxes.length; i++) { if ((checkboxes[i].checked) && (checkboxes[i].attributes.file.value == '3')) { p5clipboard.push(checkboxes[i].value); } } p5updateClipview(); }
         function p5pasteFile() { var x = ''; if ((p5clipboard != null) && (p5clipboard.length > 0)) { x = format("Confirm {0} of {1} entrie{2} to this location?", (p5clipboardCut == 0 ? 'copy' : 'move'), p5clipboard.length, ((p5clipboard.length > 1) ? 's' : '')) } setDialogMode(2, "Paste", 3, p5pasteFileEx, x); }
         function p5pasteFileEx() { meshserver.send({ action: 'fileoperation', fileop: (p5clipboardCut == 0 ? 'copy' : 'move'), scpath: p5clipboardFolder, path: filetreelocation, names: p5clipboard }); p5folderup(999); if (p5clipboardCut == 1) { p5clipboard = null, p5clipboardFolder = null, p5clipboardCut = 0; p5updateClipview(); } }
-        function p5updateClipview() { var x = ''; if ((p5clipboard != null) && (p5clipboard.length > 0)) { x = format("Holding {0} entrie{1} for {2}", p5clipboard.length, ((p5clipboard.length > 1) ? 's' : ''), (p5clipboardCut == 0 ? "copy" : "move")) + ', <a href=# onclick="return p5clearClip()" style=cursor:pointer>' + "Clear" + '</a>.' } QH('p5bottomstatus', x); p5setActions(); }
+        function p5updateClipview() { var x = ''; if ((p5clipboard != null) && (p5clipboard.length > 0)) { x = format("Holding {0} entrie{1} for {2}", p5clipboard.length, ((p5clipboard.length > 1) ? 's' : ''), (p5clipboardCut == 0 ? "Copy" : "Move")) + ', <a href=# onclick="return p5clearClip()" style=cursor:pointer>' + "Clear" + '</a>.' } QH('p5bottomstatus', x); p5setActions(); }
         function p5clearClip() { p5clipboard = null; p5clipboardFolder = null; p5clipboardCut = 0; p5updateClipview(); return false; }
 
         function p5fileDragDrop(e) {
@@ -3104,12 +3183,10 @@
             onSearchInputChanged();
         }
 
-        function onSearchInputChanged() {
-            var x = Q('SearchInput').value.toLowerCase().trim(); putstore('_search', Q('SearchInput').value);
-            QS('SearchInput')['background-color'] = (x == '') ? '#FFFFFF' : '#FDFFBE';
+        function getDevicesThatMatchFilterMobile(x, rawVal) {
+            var r = [];
             var negate = x.startsWith('!');
             if (negate) x = x.substring(1);
-            var rawVal = Q('SearchInput').value.trim();
             if (negate) rawVal = rawVal.substring(1);
             var userSearch = null, ipSearch = null, groupSearch = null, tagSearch = null, agentTagSearch = null, wscSearch = null, osSearch = null, amtSearch = null;
             if (x.startsWith('user:'.toLowerCase())) { userSearch = x.substring('user:'.length); }
@@ -3131,49 +3208,47 @@
 
             if (x == '') {
                 // No search
-                for (var d in nodes) { nodes[d].v = true; }
+                for (var d in nodes) { r.push(d); }
             } else if (ipSearch != null) {
                 // IP address search
-                for (var d in nodes) { nodes[d].v = ((nodes[d].ip != null) && (nodes[d].ip.indexOf(ipSearch) >= 0)); }
+                for (var d in nodes) { if ((nodes[d].ip != null) && (nodes[d].ip.indexOf(ipSearch) >= 0)) { r.push(d); } }
             } else if (groupSearch != null) {
                 // Group filter
-                for (var d in nodes) { nodes[d].v = (meshes[nodes[d].meshid].name.toLowerCase().indexOf(groupSearch) >= 0); }
+                for (var d in nodes) { if (meshes[nodes[d].meshid].name.toLowerCase().indexOf(groupSearch) >= 0) { r.push(d); } }
             } else if (tagSearch != null) {
                 // Tag filter
                 for (var d in nodes) {
-                    nodes[d].v = ((nodes[d].tags == null) && (tagSearch == '')) || ((nodes[d].tags != null) && (nodes[d].tags.indexOf(tagSearch) >= 0));
+                    if (((nodes[d].tags == null) && (tagSearch == '')) || ((nodes[d].tags != null) && (nodes[d].tags.indexOf(tagSearch) >= 0))) { r.push(d); }
                 }
             } else if (agentTagSearch != null) {
                 // Agent Tag filter
                 for (var d in nodes) {
-                    nodes[d].v = (((nodes[d].agent != null) && (nodes[d].agent.tag == null)) && (agentTagSearch == '')) || ((nodes[d].agent != null) && (nodes[d].agent.tag != null) && (nodes[d].agent.tag.toLowerCase().indexOf(agentTagSearch) >= 0));
+                    if ((((nodes[d].agent != null) && (nodes[d].agent.tag == null)) && (agentTagSearch == '')) || ((nodes[d].agent != null) && (nodes[d].agent.tag != null) && (nodes[d].agent.tag.toLowerCase().indexOf(agentTagSearch) >= 0))) { r.push(d); }
                 }
             } else if (userSearch != null) {
                 // User search
                 for (var d in nodes) {
-                    nodes[d].v = false;
-                    if (nodes[d].users && nodes[d].users.length > 0) { for (var i in nodes[d].users) { if (nodes[d].users[i].toLowerCase().indexOf(userSearch) >= 0) { nodes[d].v = true; } } }
+                    if (nodes[d].users && nodes[d].users.length > 0) { for (var i in nodes[d].users) { if (nodes[d].users[i].toLowerCase().indexOf(userSearch) >= 0) { r.push(d); break; } } }
                 }
             } else if (osSearch != null) {
                 // OS search
-                for (var d in nodes) { nodes[d].v = ((nodes[d].osdesc != null) && (nodes[d].osdesc.toLowerCase().indexOf(osSearch) >= 0)); }
+                for (var d in nodes) { if ((nodes[d].osdesc != null) && (nodes[d].osdesc.toLowerCase().indexOf(osSearch) >= 0)) { r.push(d); } }
             } else if (amtSearch != null) {
                 // Intel AMT search
-                for (var d in nodes) { nodes[d].v = (nodes[d].intelamt != null) && ((amtSearch == '') || (nodes[d].intelamt.state == amtSearch)); }
+                for (var d in nodes) { if ((nodes[d].intelamt != null) && ((amtSearch == '') || (nodes[d].intelamt.state == amtSearch))) { r.push(d); } }
             } else if (wscSearch != null) {
                 // Windows Security Center
                 for (var d in nodes) {
-                    nodes[d].v = false;
                     if (nodes[d].wsc) {
-                        if ((wscSearch == 1) && (nodes[d].wsc.antiVirus == 'OK') && (nodes[d].wsc.autoUpdate == 'OK') && (nodes[d].wsc.firewall == 'OK')) { nodes[d].v = true; }
-                        else if (((wscSearch == 2) || (wscSearch == 5)) && (nodes[d].wsc.antiVirus != 'OK')) { nodes[d].v = true; }
-                        else if (((wscSearch == 3) || (wscSearch == 5)) && (nodes[d].wsc.autoUpdate != 'OK')) { nodes[d].v = true; }
-                        else if (((wscSearch == 4) || (wscSearch == 5)) && (nodes[d].wsc.firewall != 'OK')) { nodes[d].v = true; }
+                        if ((wscSearch == 1) && (nodes[d].wsc.antiVirus == 'OK') && (nodes[d].wsc.autoUpdate == 'OK') && (nodes[d].wsc.firewall == 'OK')) { r.push(d); }
+                        else if (((wscSearch == 2) || (wscSearch == 5)) && (nodes[d].wsc.antiVirus != 'OK')) { r.push(d); }
+                        else if (((wscSearch == 3) || (wscSearch == 5)) && (nodes[d].wsc.autoUpdate != 'OK')) { r.push(d); }
+                        else if (((wscSearch == 4) || (wscSearch == 5)) && (nodes[d].wsc.firewall != 'OK')) { r.push(d); }
                     }
                 }
             } else if (x == '*') {
                 // Star filter
-                for (var d in nodes) { nodes[d].v = (stars[nodes[d]._id] == 1); }
+                for (var d in nodes) { if (stars[nodes[d]._id] == 1) { r.push(d); } }
             } else {
                 // Device name search
                 try {
@@ -3181,30 +3256,76 @@
                     for (var d in nodes) {
                         if (features2 & 0x00008000) {
                             if(features2 & 0x10000000){
-                                nodes[d].v = (rx.test(nodes[d].name.toLowerCase())) || (rx.test(meshes[nodes[d].meshid].name.toLowerCase())) || ((nodes[d].rnamel != null) && rx.test(nodes[d].rnamel.toLowerCase()));
+                                if ((rx.test(nodes[d].name.toLowerCase())) || (rx.test(meshes[nodes[d].meshid].name.toLowerCase())) || ((nodes[d].rnamel != null) && rx.test(nodes[d].rnamel.toLowerCase()))) { r.push(d); }
                             }else {
-                                nodes[d].v = (rx.test(nodes[d].name.toLowerCase())) || ((nodes[d].rnamel != null) && rx.test(nodes[d].rnamel.toLowerCase()));
+                                if ((rx.test(nodes[d].name.toLowerCase())) || ((nodes[d].rnamel != null) && rx.test(nodes[d].rnamel.toLowerCase()))) { r.push(d); }
                             }
                         } else {
                             if(features2 & 0x10000000){
                                 if (showRealNames) {
-                                    nodes[d].v = (nodes[d].rnamel != null) && rx.test(nodes[d].rnamel.toLowerCase()) || (rx.test(meshes[nodes[d].meshid].name.toLowerCase()));
+                                    if ((nodes[d].rnamel != null) && rx.test(nodes[d].rnamel.toLowerCase()) || (rx.test(meshes[nodes[d].meshid].name.toLowerCase()))) { r.push(d); }
                                 } else {
-                                    nodes[d].v = rx.test(nodes[d].name.toLowerCase()) || (rx.test(meshes[nodes[d].meshid].name.toLowerCase()));
+                                    if (rx.test(nodes[d].name.toLowerCase()) || (rx.test(meshes[nodes[d].meshid].name.toLowerCase()))) { r.push(d); }
                                 }
                             }else{
                                 if (showRealNames) {
-                                    nodes[d].v = (nodes[d].rnamel != null) && rx.test(nodes[d].rnamel.toLowerCase());
+                                    if ((nodes[d].rnamel != null) && rx.test(nodes[d].rnamel.toLowerCase())) { r.push(d); }
                                 } else {
-                                    nodes[d].v = rx.test(nodes[d].name.toLowerCase());
+                                    if (rx.test(nodes[d].name.toLowerCase())) { r.push(d); }
                                 }
                             }
                         }
                     }
-                } catch (ex) { for (var d in nodes) { nodes[d].v = true; } }
+                } catch (ex) { for (var d in nodes) { r.push(d); } }
             }
 
-            if (negate) { for (var d in nodes) { nodes[d].v = !nodes[d].v; } }
+            if (negate) { var allIds = []; for (var d in nodes) { allIds.push(d); } return allIds.filter(function(d) { return r.indexOf(d) < 0; }); }
+            return r;
+        }
+
+        // When the server pages the device list (maxDeviceView), plain name filters are sent to the server so they
+        // search all devices and not only the current page. Prefixed (u:, ip:, tag:...) and composite filters stay local.
+        var deviceServerFilter = '', deviceServerFilterTimer = null;
+        function getDeviceServerFilter() {
+            var x = Q('SearchInput').value.toLowerCase().trim();
+            if ((x == '') || (/[:,!]/.test(x)) || (/\s(or|and)\s/.test(x))) return '';
+            return x;
+        }
+        function updateDeviceServerFilter() {
+            if ((serverinfo == null) || (serverinfo.maxdeviceview == null) || (meshserver == null)) return;
+            if (deviceServerFilterTimer != null) { clearTimeout(deviceServerFilterTimer); deviceServerFilterTimer = null; }
+            if (getDeviceServerFilter() == deviceServerFilter) return;
+            deviceServerFilterTimer = setTimeout(function () {
+                deviceServerFilterTimer = null;
+                var f = getDeviceServerFilter();
+                if (f == deviceServerFilter) return;
+                deviceServerFilter = f;
+                meshserver.send({ action: 'nodes', skip: 0, filter: f });
+            }, 400);
+        }
+
+        function onSearchInputChanged() {
+            updateDeviceServerFilter();
+            var rawFull = Q('SearchInput').value.trim();
+            var lowerFull = rawFull.toLowerCase();
+            putstore('_search', Q('SearchInput').value);
+            QS('SearchInput')['background-color'] = (lowerFull == '') ? '#FFFFFF' : '#FDFFBE';
+
+            if (lowerFull == '') {
+                // No search, show everything
+                for (var d in nodes) { nodes[d].v = true; }
+            } else {
+                // Comma = OR, each part keeps its own prefix (u:, g:, t:, etc.) and can be negated with !
+                var rawParts = rawFull.split(','), lowerParts = lowerFull.split(','), matched = null;
+                for (var p = 0; p < lowerParts.length; p++) {
+                    var lp = lowerParts[p].trim(), rp = rawParts[p].trim();
+                    if (lp == '') { continue; } // Skip empty pieces from stray/extra commas
+                    var r2 = getDevicesThatMatchFilterMobile(lp, rp);
+                    if (matched == null) { matched = r2; } else { for (var j in r2) { if (matched.indexOf(r2[j]) < 0) { matched.push(r2[j]); } } }
+                }
+                if (matched == null) { matched = []; }
+                for (var d in nodes) { nodes[d].v = (matched.indexOf(d) >= 0); }
+            }
 
             // Check power state
             var onlineOnly = Q('OnlineCheckBox').checked;
@@ -3511,7 +3632,7 @@
                     }
 
                     // Sessions are active
-                    if ((node.sessions.kvm != null) || (node.sessions.terminal != null) || (node.sessions.files != null) || (node.sessions.tcp != null) || (node.sessions.udp != null)) {
+                    if ((node.sessions.kvm != null) || (node.sessions.terminal != null) || (node.sessions.files != null) || (node.sessions.registry != null) || (node.sessions.tcp != null) || (node.sessions.udp != null)) {
                         devNotifySub += '<img class=deviceNotifyDotSub src=images/icon-relay-notify.png width=16 height=16>';
                     }
 
@@ -3601,6 +3722,13 @@
                         var trash = '';
                         if ((j == userinfo._id) || (GetNodeRights(node) == 0xFFFFFFFF)) { trash = ' <a href=# onclick=\'return endDeviceSession("files", "' + encodeURIComponentEx(node._id) + '", "' + encodeURIComponentEx(j) + '")\' title="' + "Disconnect this session" + '" style=cursor:pointer><img src=images/trash.png border=0 height=10 width=10></a>'; }
                         x += addHtmlValue4(getUserName(j), ((node.sessions.files[j] == 1) ? "1 session" : nobreak(format("{0} sessions", node.sessions.files[j]))) + trash);
+                    }
+                } else if (i == 'registry') {
+                    x += '<u>' + "Registry" + '</u>';
+                    for (var j in node.sessions.registry) {
+                        var trash = '';
+                        if ((j == userinfo._id) || (GetNodeRights(node) == 0xFFFFFFFF)) { trash = ' <a href=# onclick=\'return endDeviceSession("registry", "' + encodeURIComponentEx(node._id) + '", "' + encodeURIComponentEx(j) + '")\' title="' + "Disconnect this session" + '" style=cursor:pointer><img src=images/trash.png border=0 height=10 width=10></a>'; }
+                        x += addHtmlValue4(getUserName(j), ((node.sessions.registry[j] == 1) ? "1 session" : nobreak(format("{0} sessions", node.sessions.registry[j]))) + trash);
                     }
                 } else if (i == 'tcp') {
                     x += '<u>' + "TCP Routing" + '</u>';
@@ -3750,7 +3878,7 @@
                 currentNode = node;
 
                 // Setup session notification
-                QV('p10deviceNotify', (currentNode.sessions != null) && ((node.sessions.kvm != null) || (node.sessions.terminal != null) || (node.sessions.files != null) || (node.sessions.tcp != null) || (node.sessions.udp != null)));
+                QV('p10deviceNotify', (currentNode.sessions != null) && ((node.sessions.kvm != null) || (node.sessions.terminal != null) || (node.sessions.files != null) || (node.sessions.registry != null) || (node.sessions.tcp != null) || (node.sessions.udp != null)));
                 QV('p10deviceStar', stars[currentNode._id] == 1);
                 QV('p10deviceHelp', (currentNode.sessions != null) && (currentNode.sessions.help != null))
                 if ((currentNode.sessions != null) && (currentNode.sessions.msg != null)) { QV('p10deviceMsg', true); QH('p10deviceMsg', Object.keys(currentNode.sessions.msg).length); } else { QV('p10deviceMsg', false); }
@@ -3819,8 +3947,8 @@
 
                 // IP-KVM information
                 if (node.mtype == 4) {
-                    if (node.portnum != null) { x += addDeviceAttribute("Port Number", node.portnum); }
-                    if (node.porttype != null) { x += addDeviceAttribute("Port Type", node.porttype); }
+                    if (node.portnum != null) { x += addDeviceAttribute("Port Number", EscapeHtml(node.portnum)); }
+                    if (node.porttype != null) { x += addDeviceAttribute("Port Type", EscapeHtml(node.porttype)); }
                 }
 
                 // Attribute: Mesh Agent
@@ -3834,7 +3962,7 @@
                     if (node.agent.ver != 0) { str += ' v' + node.agent.ver; }
                     if (node.agent.id == 14) { str = node.agent.core; }
                     if ((node.agent.root === false) && ((node.conn & 1) != 0)) { str += ', ' + "Restricted"; }
-                    x += addDeviceAttribute("Mesh Agent", str);
+                    x += addDeviceAttribute("Mesh Agent", EscapeHtml(str));
                 }
 
                 // Attribute: Intel AMT
@@ -3980,6 +4108,7 @@
                 //drawDeviceTimeline();
                 setupTerminal();
                 setupFiles();
+                setupRegistry();
                 if (meshrights & 16) { setupConsole(); }
 
                 // Show bottom buttons
@@ -4086,6 +4215,7 @@
             QV('p10general', currentDevicePanel == 0);
             QV('p10desktop', currentDevicePanel == 1); // Show if we have remote control rights or desktop view only rights
             QV('p10files', currentDevicePanel == 2);
+            QV('p10registry', currentDevicePanel == 6);
             QV('p10details', currentDevicePanel == 3);
             QV('p10console', currentDevicePanel == 4);
             QV('p10terminal', currentDevicePanel == 5);
@@ -4105,10 +4235,12 @@
             ) { menus.push({ n: "Terminal", f: 'setupDeviceMenu(5)' }); }
 
             if ((currentDevicePanel != 2) && (currentNode != null) && (meshrights & 8) && ((meshrights == 0xFFFFFFFF) || ((meshrights & 1024) == 0)) && ((currentNode.mtype != 1) && (currentNode.agent) && (currentNode.agent.caps & 4))) { menus.push({ n: "Files", f: 'setupDeviceMenu(2)' }); }
+            if ((currentDevicePanel != 6) && (currentNode != null) && (currentNode.agent != null) && (meshrights & 8) && ((meshrights == 0xFFFFFFFF) || ((meshrights & 4194304) == 0))) { menus.push({ n: "Registry", f: 'setupDeviceMenu(6)' }); }
             if ((currentDevicePanel != 3) && (currentNode != null) && (currentNode.mtype < 3) && ((meshrights & 1048576) != 0)) { menus.push({ n: "Details", f: 'setupDeviceMenu(3)' }); }
             if ((currentDevicePanel != 4) && (currentNode != null) && (meshrights & 0x00000010) && (currentNode.mtype == 2)) { menus.push({ n: "Console", f: 'setupDeviceMenu(4)' }); }
             updateFooterMenu(menus);
             updateCurrentUrl();
+            if (currentDevicePanel == 6) { setupRegistry(); }
             if (currentDevicePanel == 1) { deskAdjust(); }
         }
 
@@ -4691,6 +4823,7 @@
                 } else if ((contype == null) || (contype == 1) || ((contype == 3) && (currentNode.agent.id > 4))) {
                     // Setup the Mesh Agent remote desktop
                     desktop = CreateAgentRedirect(meshserver, CreateAgentRemoteDesktop('Desk'), serverPublicNamePort, authCookie, authRelayCookie, domainUrl);
+                    desktop.m.UseExtendedKeyFlag = isWindowsNode(desktopNode);
                     desktop.debugmode = debugmode;
                     desktop.m.debugmode = debugmode;
                     desktop.attemptWebRTC = attemptWebRTC;
@@ -4733,6 +4866,7 @@
         function p11clearConsoleMsg() { QH('p11DeskConsoleMsg', ''); QV('p11DeskConsoleMsg', false); if (p11DeskConsoleMsgTimer) { clearTimeout(p11DeskConsoleMsgTimer); p11DeskConsoleMsgTimer = null; } }
         function p12clearConsoleMsg() { QH('p12TermConsoleMsg', ''); QV('p12TermConsoleMsg', false); if (p12TermConsoleMsgTimer) { clearTimeout(p12TermConsoleMsgTimer); p12TermConsoleMsgTimer = null; } }
         function p13clearConsoleMsg() { QH('p13FilesConsoleMsg', ''); QV('p13FilesConsoleMsg', false); if (p13FilesConsoleMsgTimer) { clearTimeout(p13FilesConsoleMsgTimer); p13FilesConsoleMsgTimer = null; } }
+        function p18clearConsoleMsg() { QH('p18ConsoleMsg', ''); QV('p18ConsoleMsg', false); if (p18ConsoleMsgTimer) { clearTimeout(p18ConsoleMsgTimer); p18ConsoleMsgTimer = null; } }
 
         function p12setConsoleMsg(msg, timeout) {
             if (msg) {
@@ -4753,6 +4887,17 @@
                 if (timeout) { p13FilesConsoleMsgTimer = setTimeout(p13clearConsoleMsg, timeout); }
             } else {
                 p13clearConsoleMsg();
+            }
+        }
+
+        function p18setConsoleMsg(msg, timeout) {
+            if (msg) {
+                Q('p18ConsoleMsg').innerHTML += msg;
+                QV('p18ConsoleMsg', true);
+                if (p18ConsoleMsgTimer != null) { clearTimeout(p18ConsoleMsgTimer); }
+                if (timeout) { p18ConsoleMsgTimer = setTimeout(p18clearConsoleMsg, timeout); }
+            } else {
+                p18clearConsoleMsg();
             }
         }
 
@@ -5906,9 +6051,261 @@
             p13updateClipview();
         }
 
+        //
+        // REGISTRY
+        //
+
+        var registry = null;
+        var registryNode = null;
+        var registryRoots = null;
+        var registryCurrentHive = null;
+        var registryCurrentPath = '';
+        var registryKnownHives = { 'HKEY_LOCAL_MACHINE': 1, 'HKLM': 'HKEY_LOCAL_MACHINE', 'HKEY_CURRENT_USER': 1, 'HKCU': 'HKEY_CURRENT_USER', 'HKEY_USERS': 1, 'HKU': 'HKEY_USERS', 'HKEY_CLASSES_ROOT': 1, 'HKCR': 'HKEY_CLASSES_ROOT', 'HKEY_CURRENT_CONFIG': 1, 'HKCC': 'HKEY_CURRENT_CONFIG' };
+
+        function p18setCurrentPath(path) {
+            Q('p18currentpath').value = path;
+        }
+
+        function p18getDisplayPath(hive, path) {
+            if (hive == null) { return 'Root'; }
+            return hive + ((path != '') ? ('\\' + path) : '');
+        }
+
+        function p18normalizePath(path) {
+            path = (path || '').trim();
+            if ((path == '') || (path.toLowerCase() == 'root')) { return { hive: null, path: '' }; }
+            path = path.split('/').join('\\');
+            while (path.indexOf('\\\\') >= 0) { path = path.split('\\\\').join('\\'); }
+            var p = path.split('\\');
+            if (p.length == 0) { return null; }
+            var hive = p.shift();
+            var mappedHive = registryKnownHives[hive.toUpperCase()];
+            if (mappedHive == null) { mappedHive = hive.toUpperCase(); }
+            if (mappedHive === 1) { mappedHive = hive.toUpperCase(); }
+            if (registryKnownHives[mappedHive] == null) { return null; }
+            return { hive: mappedHive, path: p.join('\\') };
+        }
+
+        function p18renderRegistryRow(kind, name, type, value, funcName, encodedName) {
+            var icon = ((kind == 'value') ? '<img src="images/key12.png" style="float:left;margin-top:2px;margin-right:4px" width=12 height=12 />' : '<div class=fileIcon2' + ((funcName != null) ? (' onclick=' + funcName + '("' + encodedName + '")') : '') + '></div>');
+            var nameHtml = EscapeHtml(name);
+            if (funcName != null) { nameHtml = '<a href=# style=cursor:pointer onclick=\'return ' + funcName + '("' + encodedName + '")\'>' + nameHtml + '</a>'; }
+            var typeHtml = (type ? EscapeHtml(type) : '&nbsp;');
+            var valueHtml = (value ? EscapeHtml(value) : '&nbsp;');
+            return '<div class=filelist file=999><table style="width:100%;table-layout:fixed" cellpadding=0 cellspacing=0><tr><td style="padding-right:6px" title="' + EscapeHtml(name) + '">' + icon + nameHtml + '</td><td style="width:110px;color:#666;white-space:nowrap" title="' + EscapeHtml(type || '') + '">' + typeHtml + '</td><td style="width:34%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + EscapeHtml(value || '') + '">' + valueHtml + '</td></tr></table></div>';
+        }
+
+        function p18renderRegistryHeader() {
+            return '<div class=filelist file=999 style="font-weight:bold;border-bottom:1px solid #DDD;padding-bottom:2px;margin-bottom:4px"><table style="width:100%;table-layout:fixed" cellpadding=0 cellspacing=0><tr><td style="padding-right:6px">' + "Name" + '</td><td style="width:110px;color:#666;white-space:nowrap">' + "Type" + '</td><td style="width:34%;white-space:nowrap">' + "Data" + '</td></tr></table></div>';
+        }
+
+        function setupRegistry() {
+            if ((registryNode != currentNode) && (registry != null)) {
+                if (registryNode._id != currentNode._id) {
+                    registry.Stop(); registryNode = null; registry = null;
+                }
+            }
+            registryNode = currentNode;
+            var online = ((registryNode != null) && ((registryNode.conn & 1) != 0));
+            QE('p18Connect', online);
+            QV('p18Connect', registry == null);
+            QV('p18Disconnect', registry != null);
+            QE('p18RefreshButton', registry != null);
+            QE('p18GoToButton', registry != null);
+            QE('p18FolderUp', (registry != null) && ((registryCurrentHive != null) || (registryCurrentPath != '')));
+            QV('p18subhead', registry != null);
+            if ((registryRoots == null) && (registry == null)) {
+                QH('p18RootsInfo', "Connect to load the first read-only Registry slice from the agent.");
+                QH('p18roots', '');
+                p18setCurrentPath('Root');
+            }
+        }
+
+        function CreateRemoteRegistry(onUpdate) {
+            var obj = { protocol: 4 };
+            obj.onUpdate = onUpdate;
+            obj.xxStateChange = function (state) { }
+            obj.ProcessData = function (data) { obj.onUpdate(data); }
+            return obj;
+        }
+
+        function onRegistryStateChange(xregistry, state) {
+            QV('p18Connect', state == 0);
+            QV('p18Disconnect', state != 0);
+            Q('p18Status').textContent = StatusStrs[state];
+            switch (state) {
+                case 0:
+                    registryRoots = null;
+                    registryCurrentHive = null;
+                    registryCurrentPath = '';
+                    QH('p18RootsInfo', "Connect to load the first read-only Registry slice from the agent.");
+                    QH('p18roots', '');
+                    p18setCurrentPath('Root');
+                    if (registry != null) { registry.Stop(); registry = null; }
+                    break;
+                case 3:
+                    p18requestRoots();
+                    break;
+            }
+            setupRegistry();
+        }
+
+        function connectRegistry() {
+            p18clearConsoleMsg();
+            if (!registry) {
+                registry = CreateAgentRedirect(meshserver, CreateRemoteRegistry(p18gotRegistry), serverPublicNamePort, authCookie, authRelayCookie, domainUrl);
+                registry.attemptWebRTC = false;
+                registry.onStateChanged = onRegistryStateChange;
+                registry.onConsoleMessageChange = function () {
+                    if (registry.consoleMessage) {
+                        p18setConsoleMsg(formatAgentConsoleMessage(registry.consoleMessage, registry.consoleMessageId, registry.consoleMessageArgs), registry.consoleMessageTimeout ? registry.consoleMessageTimeout * 1000 : 5000);
+                    } else {
+                        p18clearConsoleMsg();
+                    }
+                }
+                registry.Start(registryNode._id);
+            } else {
+                registry.Stop();
+                registry = null;
+            }
+        }
+
+        function p18requestRoots() {
+            registryCurrentHive = null;
+            registryCurrentPath = '';
+            p18setCurrentPath('Root');
+            QH('p18RootsInfo', "Loading root hives...");
+            if (registry != null) { registry.sendText({ action: 'listroots', reqid: 1 }); }
+            setupRegistry();
+        }
+
+        function p18requestKey(hive, path) {
+            registryCurrentHive = hive;
+            registryCurrentPath = path || '';
+            p18setCurrentPath(p18getDisplayPath(hive, registryCurrentPath));
+            QH('p18RootsInfo', "Loading registry key...");
+            if (registry != null) { registry.sendText({ action: 'list', reqid: 2, hive: hive, path: registryCurrentPath }); }
+            setupRegistry();
+        }
+
+        function p18openRoot(hive) {
+            try { hive = decodeURIComponent(hive); } catch (ex) { }
+            p18requestKey(hive, '');
+            return false;
+        }
+
+        function p18openSubKey(name) {
+            try { name = decodeURIComponent(name); } catch (ex) { }
+            var nextPath = (registryCurrentPath != '') ? (registryCurrentPath + '\\' + name) : name;
+            p18requestKey(registryCurrentHive, nextPath);
+            return false;
+        }
+
+        function p18refreshRegistry() {
+            if (registry == null) return;
+            if (registryCurrentHive == null) { p18requestRoots(); } else { p18requestKey(registryCurrentHive, registryCurrentPath); }
+        }
+
+        function p18openPathInput() {
+            if (registry == null) return false;
+            var target = p18normalizePath(Q('p18currentpath').value);
+            if (target == null) {
+                QH('p18RootsInfo', "Invalid registry path. Use a full hive path such as HKEY_LOCAL_MACHINE\\Software.");
+                return false;
+            }
+            if (target.hive == null) { p18requestRoots(); } else { p18requestKey(target.hive, target.path); }
+            return false;
+        }
+
+        function p18folderup() {
+            if (registry == null) return;
+            if (registryCurrentHive == null) { p18requestRoots(); return; }
+            if (registryCurrentPath == '') {
+                p18requestRoots();
+                return;
+            }
+            var p = registryCurrentPath.split('\\');
+            p.pop();
+            p18requestKey(registryCurrentHive, p.join('\\'));
+        }
+
+        function p18gotRegistry(data) {
+            try { data = JSON.parse(decode_utf8(data)); } catch (ex) {
+                try { data = JSON.parse(data); } catch (ex2) { console.log('Unable to parse registry payload: ' + data); return; }
+            }
+            if (data.error) {
+                QH('p18RootsInfo', EscapeHtml(data.error));
+                QH('p18roots', '');
+                return;
+            }
+            if (data.action == 'listroots') {
+                registryRoots = data.roots || [];
+                QH('p18RootsInfo', (registryRoots.length > 0) ? "Read-only root hives returned by the agent:" : "No registry roots were returned.");
+                var x = '', itemCount = 0;
+                for (var i = 0; i < registryRoots.length; i++) {
+                    if (itemCount == 0) { x = p18renderRegistryHeader(); }
+                    x += p18renderRegistryRow('hive', registryRoots[i], 'Hive', '', 'p18openRoot', encodeURIComponentEx(registryRoots[i]));
+                    itemCount++;
+                }
+                if (itemCount == 0) { x = '<div style="padding:8px 10px;color:#666"><i>' + "No registry roots were returned." + '</i></div>'; }
+                QH('p18roots', x);
+                setupRegistry();
+            }
+            if (data.action == 'list') {
+                registryCurrentHive = data.hive;
+                registryCurrentPath = data.path || '';
+                p18setCurrentPath(p18getDisplayPath(registryCurrentHive, registryCurrentPath));
+                var x = '', itemCount = 0;
+                if ((data.subkeys != null) && (data.subkeys.length > 0)) {
+                    for (var i = 0; i < data.subkeys.length; i++) {
+                        if (itemCount == 0) { x = p18renderRegistryHeader(); }
+                        x += p18renderRegistryRow('key', data.subkeys[i], 'Key', '', 'p18openSubKey', encodeURIComponentEx(data.subkeys[i]));
+                        itemCount++;
+                    }
+                }
+                if ((data.values != null) && (data.values.length > 0)) {
+                    for (var j = 0; j < data.values.length; j++) {
+                        if (itemCount == 0) { x = p18renderRegistryHeader(); }
+                        x += p18renderRegistryRow('value', data.values[j].name, data.values[j].type, data.values[j].value, null, null);
+                        itemCount++;
+                    }
+                }
+                if (itemCount == 0) { x = '<div style="padding:8px 10px;color:#666"><i>' + "Registry key is empty." + '</i></div>'; }
+                QH('p18RootsInfo', "Read-only registry view.");
+                QH('p18roots', x);
+                setupRegistry();
+            }
+        }
+
         var p13filetree = null;
         var p13targetpath = null;
         var p13filetreelocation = [];
+
+        // File failures must remain visible after the file list refreshes.
+        function p13fileOperationError(data) {
+            var errors = data.errors || [{ path: data.path || '', error: data.error || "The remote device did not return an error description." }];
+            var html = '<div style="max-height:240px;overflow:auto;word-break:break-word">';
+            for (var i = 0; i < errors.length; i++) {
+                html += '<p><b>' + EscapeHtml(errors[i].path || '') + '</b><br>' + EscapeHtml(errors[i].error || '') + '</p>';
+            }
+            html += '</div><p>' + "Close the application using the file and retry. Also check the file permissions and free disk space." + '</p>';
+            if ((filesNode != null) && (filesNode.agent != null) && ((GetNodeRights(filesNode) & 16) != 0)) {
+                html += '<p>' + "If Mesh Agent is holding the file, restarting its service can release the lock." + '</p><input type=button value="' + "Restart agent service" + '" onclick=p13restartAgentForFiles()>';
+            }
+            setDialogMode(2, (data.operation == 'rm') ? "Delete failed" : "Upload failed", 1, null, html);
+        }
+
+        function p13restartAgentForFiles() {
+            if ((filesNode == null) || (filesNode.agent == null) || ((GetNodeRights(filesNode) & 16) == 0)) return;
+            var html = '<p>' + format("Restart Mesh Agent on {0}?", EscapeHtml(filesNode.name)) + '</p><p>' + "This disconnects all remote sessions to this device. It releases locks held by Mesh Agent. Files held by other applications will remain locked." + '</p>';
+            setDialogMode(2, "Restart agent service", 3, p13restartAgentForFilesEx, html, filesNode._id);
+        }
+
+        function p13restartAgentForFilesEx(button, nodeid) {
+            if (button != 1) return;
+            meshserver.send({ action: 'msg', type: 'console', nodeid: nodeid, value: 'service restart' });
+            messagebox("Restart agent service", "Restart requested. Reconnect to Files after the device comes online, then retry the file operation.");
+        }
 
         function p13gotFiles(data) {
             if ((data.length > 0) && (data.charCodeAt(0) != 123)) { p13gotDownloadBinaryData(data); return; } // This is ok because 4 first bytes is a control value.
@@ -5927,6 +6324,7 @@
 
             // Process file upload commands
             if ((data.action != null) && (data.action.startsWith('upload'))) { p13gotUploadData(data); return; }
+            if (data.action == 'fileerror') { p13fileOperationError(data); return; }
 
             if (data.path != null) {
                 if (data.dir == null) {
@@ -5979,6 +6377,15 @@
             return checkedNames;
         }
 
+        function p13truncateName(name, maxlen) {
+            if (!maxlen) maxlen = 40;
+            if (name.length <= maxlen) return EscapeHtml(name);
+            var dot = name.lastIndexOf('.');
+            var ext = (dot > 0) ? name.substring(dot) : '';
+            var keep = maxlen - ext.length - 1;
+            return EscapeHtml(name.substring(0, keep)) + '…' + EscapeHtml(ext);
+        }
+
         function p13updateFiles(checkedNames) {
             var html1 = '', html2 = '', displayPath = '<a style=cursor:pointer;color:black onclick=p13folderup(0)>' + "Root" + '</a>', fullPath = 'Root';
 
@@ -6004,14 +6411,20 @@
                 var fsize = '';
                 if (f.s != null) { fsize = getFileSizeStr(f.s); }
 
+                var fdatestr = '';
+                if (f.d != null) { var fdate = new Date(f.d); if (typeof f.d == 'number') { fdate = new Date(f.d * 1000); } fdatestr = printDateTime(fdate) + '&nbsp;'; }
+
                 var h = '';
                 if (f.t < 3) {
                     var right = '';
-                    h = '<div class=filelist file=999><input file=999 style=float:left name=fd class=fcb type=checkbox onchange=p13setActions() value=\'' + f.nx + '\'>&nbsp;<span style=float:right>' + right + '</span><span title="' + shortname + '"><div class=fileIcon' + f.t + '></div><a style=cursor:pointer onclick=p13folderset("' + encodeURIComponent(f.nx) + '")>' + shortname + '</a></span></div>';
+                    var sysvol = (isWindowsNode(currentNode) && f.dt && (DeviceDetailsNodeId == currentNode._id) && DeviceDetailsHardware && DeviceDetailsHardware.windows && DeviceDetailsHardware.windows.volumes) ? DeviceDetailsHardware.windows.volumes[shortname.charAt(0).toUpperCase()] : null;
+                    var displayname = (sysvol && sysvol.name) ? (EscapeHtml(sysvol.name) + ' (' + shortname + ')') : shortname;
+                    h = '<div class=filelist file=999><div class=filelistrow><input file=999 style="flex-shrink:0" name=fd class=fcb type=checkbox onchange=p13setActions() value=\'' + EscapeHtml(f.nx) + '\'>&nbsp;<div class="fileIcon' + (f.dt == 'REMOVABLE' ? 5 : (f.dt == 'CDROM' ? 6 : f.t)) + '" style="flex-shrink:0;margin-top:0"></div>&nbsp;<div class=filelistcontent><div class=filelistname><a style=cursor:pointer onclick=p13folderset("' + encodeURIComponent(f.nx) + '")>' + displayname + '</a></div><div class=filelistmeta>' + fdatestr + EscapeHtml(fsize) + '</div></div></div></div>';
                 } else {
-                    var link = shortname;
-                    if (f.s > 0) { link = '<a rel=\"noreferrer noopener\" target=\"_blank\" style=cursor:pointer onclick=\"p13downloadfile(\'' + encodeURIComponent(newlinkpath + '/' + name) + '\',\'' + encodeURIComponent(name) + '\',' + f.s + ')\">' + shortname + '</a>'; }
-                    h = '<div class=filelist file=3><input file=3 style=float:left name=fd class=fcb type=checkbox onchange=p13setActions() value=\'' + f.nx + '\'>&nbsp;<span style=float:right;padding-right:4px>' + fsize + '</span><span title="' + shortname + '"><div class=fileIcon' + f.t + '></div>' + link + '</span></div>';
+                    var truncname = p13truncateName(name);
+                    var link = '<a style=cursor:pointer onclick=\"p13downloadfile(\'' + encodeURIComponentEx(newlinkpath + '/' + name) + '\',\'' + encodeURIComponentEx(name) + '\',' + f.s + ')\">' + truncname + '</a>';
+                    if (f.s == 0) { link = truncname; }
+                    h = '<div class=filelist file=3><div class=filelistrow><input file=3 style="flex-shrink:0" name=fd class=fcb type=checkbox onchange=p13setActions() value=\'' + EscapeHtml(f.nx) + '\'>&nbsp;<div class="fileIcon' + f.t + '" style="flex-shrink:0;margin-top:0"></div>&nbsp;<div class=filelistcontent><div class=filelistname>' + link + '</div><div class=filelistmeta>' + fdatestr + EscapeHtml(fsize) + '</div></div></div></div>';
                 }
 
                 if (f.t < 3) { html1 += h; } else { html2 += h; }
@@ -6065,7 +6478,17 @@
 
         function p13sort_files(files) {
             var r = [], sortselection = Q('p13sortdropdown').value;
-            for (var i in files) { files[i].nx = i; if (files[i].s == null) { files[i].s = 0; } if (files[i].n == null) { files[i].n = i; } files[i].ln = files[i].n.toLowerCase(); r.push(files[i]); }
+            for (var i in files) {
+                var file = files[i];
+                file.nx = i;
+                file.t = parseInt(file.t);
+                if (isNaN(file.t)) { file.t = 3; }
+                if (file.s == null) { file.s = 0; }
+                if (file.n == null) { file.n = i; }
+                file.n = String(file.n);
+                file.ln = file.n.toLowerCase();
+                r.push(file);
+            }
             p13sortorder = 1;
             if (sortselection > 3) { p13sortorder = -1; sortselection -= 3; }
             if (sortselection == 1) { r.sort(p13sort_filename); }
@@ -6118,7 +6541,7 @@
         function p13createfolderEx() { files.sendText({ action: 'mkdir', reqid: 1, path: p13filetreelocation.join('/') + '/' + Q('p13renameinput').value }); p13folderup(999); }
         function p13deletefile() { var cc = p13getFileSelCount(), rec = (p13getFileSelDirCount() > 0) ? '<br /><br /><label><input type=checkbox id=p13recdeleteinput>' + "Recursive delete" + '</label><br>' : '<input type=checkbox id=p13recdeleteinput style=\'display:none\'>'; setDialogMode(2, "Delete", 3, p13deletefileEx, (cc > 1) ? (format("Delete {0} selected items?", cc) + rec) : ("Delete selected item?" + rec)); }
         function p13deletefileEx() { var delfiles = [], checkboxes = document.getElementsByName('fd'); for (var i = 0; i < checkboxes.length; i++) { if (checkboxes[i].checked) { delfiles.push(p13filetree.dir[checkboxes[i].value].n); } } files.sendText({ action: 'rm', reqid: 1, path: p13filetreelocation.join('/'), delfiles: delfiles, rec: Q('p13recdeleteinput').checked }); p13folderup(999); }
-        function p13renamefile() { var renamefile, checkboxes = document.getElementsByName('fd'); for (var i = 0; i < checkboxes.length; i++) { if (checkboxes[i].checked) { renamefile = p13filetree.dir[checkboxes[i].value].n; } } setDialogMode(2, "Rename", 3, p13renamefileEx, '<input type=text id=p13renameinput maxlength=64 onkeyup=p13fileNameCheck(event) style=width:100% value="' + renamefile + '" />', { action: 'rename', path: p13filetreelocation.join('/'), oldname: renamefile }); focusTextBox('p13renameinput'); p13fileNameCheck(); }
+        function p13renamefile() { var renamefile, checkboxes = document.getElementsByName('fd'); for (var i = 0; i < checkboxes.length; i++) { if (checkboxes[i].checked) { renamefile = p13filetree.dir[checkboxes[i].value].n; } } setDialogMode(2, "Rename", 3, p13renamefileEx, '<input type=text id=p13renameinput maxlength=64 onkeyup=p13fileNameCheck(event) style=width:100% value="' + EscapeHtml(renamefile) + '" />', { action: 'rename', path: p13filetreelocation.join('/'), oldname: renamefile }); focusTextBox('p13renameinput'); p13fileNameCheck(); }
         function p13renamefileEx(b, t) { t.newname = Q('p13renameinput').value; files.sendText(t); p13folderup(999); }
         function p13fileNameCheck(e) { var x = isFilenameValid(Q('p13renameinput').value); QE('idx_dlgOkButton', x); if ((x == true) && (e != null) && (e.keyCode == 13)) { dialogclose(1); } }
         function p13uploadFile() { setDialogMode(2, "Upload File", 3, p13uploadFileEx, '<input type=file name=files id=p13uploadinput style=width:100% multiple=multiple onchange="updateUploadDialogOk(\'p13uploadinput\')" />'); updateUploadDialogOk('p13uploadinput'); }
@@ -6371,12 +6794,18 @@
 
         // Receive upload ack from the mesh agent, use this to keep sending more data
         function p13gotUploadData(cmd) {
-            if ((uploadFile == null) || (parseInt(uploadFile.xfilePtr) != parseInt(cmd.reqid))) { return; }
+            if ((uploadFile == null) || ((parseInt(uploadFile.xfilePtr) != parseInt(cmd.reqid)) && !((cmd.action == 'uploaderror') && (cmd.reqid == null)))) { return; }
             switch (cmd.action) {
                 case 'uploadstart': { uploadFile.xdataPriming = 8; p13uploadNextPart(false); break; } // Send 8 more blocks of 16k to fill the websocket.
                 case 'uploadack': { p13uploadNextPart(false); break; }
                 case 'uploaddone': { if (uploadFile.xfiles.length > uploadFile.xfilePtr + 1) { p13uploadNextFile(); } else { p13uploadFileTransferDone(); } break; }
-                case 'uploaderror': { p13uploadFileCancel(); break; }
+                case 'uploaderror': {
+                    var failedFile = uploadFile.xfiles[uploadFile.xfilePtr];
+                    if (!cmd.path) { cmd.path = uploadFile.xpath + '/' + (failedFile ? failedFile.name : ''); }
+                    p13uploadFileCancel();
+                    p13fileOperationError(cmd);
+                    break;
+                }
                 case 'uploadhash': {
                     var file = uploadFile.xfiles[uploadFile.xfilePtr];
                     if (file) {
@@ -6508,6 +6937,12 @@
                 const date = printDateTime(new Date(thedate.year, thedate.month, thedate.day, thedate.hours, thedate.minutes, thedate.seconds));
                 x += addDetailItem("Last Boot Up Time", date);
             }
+            if (hardware.linux && hardware.linux.arch) {
+                var arch = hardware.linux.arch;
+                x += addDetailItem("Architecture", (['x86_64','amd64'].includes(arch) ? "64-bit" : ['i686','x86','i586'].includes(arch) ? "32-bit" : EscapeHtml(arch)), s);
+            }
+            if (hardware.linux && hardware.linux.kernel_release) { x += addDetailItem("Kernel Release", EscapeHtml(hardware.linux.kernel_release), s); }
+            if (hardware.linux && hardware.linux.kernel_build) { x += addDetailItem("Kernel Build", EscapeHtml(hardware.linux.kernel_build), s); }
             if(hardware.darwin && hardware.darwin.LastBootUpTime){
                 var lastBootUpTime = new Date(hardware.darwin.LastBootUpTime * 1000); // must times by 1000 even tho timestamp is correct?
                 var thedate = {
@@ -6540,10 +6975,27 @@
                 if (y.length > 0) x += addDetailItem("Windows Defender", y.join(', '));
             }
 
+            
+            // Pending Reboot
+            if (node.pr) {
+                var y = [];
+                for (var i in node.pr){ y.push(EscapeHtml(node.pr[i])); }
+                if (y.length > 0) x += addDetailItem("Pending Reboot", y.join(', '));
+            }
+
+            // Linux Security Central
+            if (node.lsc) {
+                var y = [];
+                if (node.lsc.antiVirus != null) { if (node.lsc.antiVirus == 'OK') { y.push("AV" + ' - <span style=color:green>' + "OK" + '</span>'); } else { y.push("AV" + ' - <span style=color:red>' + "BAD" + '</span>'); } }
+                if (node.lsc.firewall != null) { if (node.lsc.firewall == 'OK') { y.push("Firewall" + ' - <span style=color:green>' + "OK" + '</span>'); } else { y.push("Firewall" + ' - <span style=color:red>' + "BAD" + '</span>'); } }
+                if (y.length > 0) x += addDetailItem("Linux Security", y.join(', '));
+            }
+
             // Antivirus
             if (node.av && node.av.length > 0) {
                 var y = [];
                 for (var i in node.av) {
+                    if (node.av[i] == null) continue;
                     if (node.av[i].product) {
                         var avx = EscapeHtml(node.av[i].product);
                         if (node.av[i].enabled !== true) { avx += ' - <span style=color:red>' + "Disabled" + '</span>'; }
@@ -6584,25 +7036,27 @@
                     if (node.agent.id <= agentsStr.length) { str = agentsStr[node.agent.id]; } else { str = agentsStr[0]; }
                     if (node.agent.ver != 0) { str += ' v' + node.agent.ver; }
                     if (node.agent.id == 14) { str = node.agent.core; }
-                    x += addDetailItem("Mesh Agent", str);
+                    x += addDetailItem("Mesh Agent", EscapeHtml(str));
                 }
-                if (node.firstconnect) { x += addDetailItem("First agent connection", printDateTime(new Date(node.firstconnect))); }
+                if (node._id) { x += addDetailItem("Node ID", EscapeHtml(node._id.split('/')[2]), true); }
+                if (node.firstconnect) { x += addDetailItem("First agent connection", EscapeHtml(printDateTime(new Date(node.firstconnect)))); }
                 if ((node.conn & 1) != 0) {
                     x += addDetailItem("Last agent connection", "Connected now");
                 } else {
-                    if (node.lastconnect) { x += addDetailItem("Last agent connection", printDateTime(new Date(node.lastconnect))); }
+                    if (node.lastconnect) { x += addDetailItem("Last agent connection", EscapeHtml(printDateTime(new Date(node.lastconnect)))); }
                 }
                 if (node.lastaddr) {
                     var splitip = node.lastaddr.split(':');
                     if (splitip.length > 2) {
                         // IPv6
-                        x += addDetailItem("Last agent address", node.lastaddr);
+                        var v6addr = splitip.slice(0, -1).join(':');
+                        x += addDetailItem("Last agent address", isPrivateIP(v6addr) ? EscapeHtml(node.lastaddr) : ('<a href="https://iplocation.com/?ip=' + encodeURIComponent(v6addr) + '" rel="noreferrer noopener" target="MeshIPLookup">' + EscapeHtml(node.lastaddr) + '</a>'));
                     } else {
                         // IPv4
                         if (isPrivateIP(node.lastaddr)) {
-                            x += addDetailItem("Last agent address", splitip[0]);
+                            x += addDetailItem("Last agent address", EscapeHtml(splitip[0]));
                         } else {
-                            x += addDetailItem("Last agent address", '<a href="https://iplocation.com/?ip=' + splitip[0] + '" rel="noreferrer noopener" target="MeshIPLoopup">' + splitip[0] + '</a>');
+                            x += addDetailItem("Last agent address", '<a href="https://iplocation.com/?ip=' + EscapeHtml(splitip[0]) + '" rel="noreferrer noopener" target="MeshIPLookup">' + EscapeHtml(splitip[0]) + '</a>');
                         }
                     }
                 }
@@ -6610,12 +7064,12 @@
                     if (hardware.agentvers.compileTime) {
                         try {
                             var d = Date.parse(hardware.agentvers.compileTime)
-                            x += addDetailItem("Compile time", printDateTime(new Date(d)));
+                            x += addDetailItem("Compile time", EscapeHtml(printDateTime(new Date(d))));
                         } catch (ex) { }
                     }
                 }
                 if (hardware.time != null) {
-                    x += addDetailItem("Last details update", printDateTime(new Date(hardware.time)));
+                    x += addDetailItem("Last details update", EscapeHtml(printDateTime(new Date(hardware.time))));
                 }
                 if (x != '') { sections.push({ name: "Mesh Agent", html: x, img: 'meshagent' }); }
             }
@@ -6666,9 +7120,9 @@
                     }
                     x += '</div></td></tr>';
                 }
-                if (hardware.network && hardware.network.dns) {
+                if (hardware.network && Array.isArray(hardware.network.dns)) {
                     x += '<tr><td><div class=style10 style=border-radius:5px;padding:8px>';
-                    x += addDetailItem('<b>' + "DNS Servers" + '</b>', hardware.network.dns.join(", "));
+                    x += addDetailItem('<b>' + "DNS Servers" + '</b>', EscapeHtml(hardware.network.dns.join(", ")));
                     x += '</div></td></tr>';
                 }
                 x += '</table>';
@@ -6713,6 +7167,7 @@
                 if (ident.board_version) { x += addDetailItem("Version", EscapeHtml(ident.board_version), s); }
                 if (ident.product_uuid) { x += addDetailItem("Identifier", EscapeHtml(ident.product_uuid), s); }
                 if (ident.cpu_name) { x += addDetailItem("CPU", EscapeHtml(ident.cpu_name).split('(TM)').join('&trade;').split('(R)').join('&reg;'), s); }
+                if (Array.isArray(ident.gpu_name)) { ident.gpu_name = ident.gpu_name.filter(function (x) { return x != null; }); }
                 if (ident.gpu_name) { for (var i in ident.gpu_name) { x += addDetailItem("GPU", EscapeHtml(ident.gpu_name[i]).split('(TM)').join('&trade;').split('(R)').join('&reg;'), s); } }
                 if (x != '') { sections.push({ name: "Motherboard", html: x, img: 'motherboard' }); }
 
@@ -6743,24 +7198,25 @@
                 x += '<table style=width:100%>';
                 for (var i in hardware.battery) {
                     var battery = hardware.battery[i];
+                    if (battery == null) continue;
                     x += '<tr><td><div class=style10 style=border-radius:5px;padding:8px>';
                     x += '<div style=margin-bottom:3px><b>' + EscapeHtml(battery.DeviceName ? battery.DeviceName : "Unknown") + '</b></div>';
                     if (battery.CycleCount) { x += addDetailItem("Cycle Count", EscapeHtml(battery.CycleCount), s); }
-                    if (battery.FullChargedCapacity) { x += addDetailItem("Full Charged Capacity", format("{0} mWh", battery.FullChargedCapacity), s); }
+                    if (battery.FullChargedCapacity) { x += addDetailItem("Full Charged Capacity", format('{0} mWh', battery.FullChargedCapacity), s); }
                     if (battery.EstimatedRuntime) { x += addDetailItem("Estimated Runtime", format("{0} minutes", Math.floor((battery.EstimatedRuntime / 60))), s); }
                     if (battery.Chemistry) { x += addDetailItem("Chemistry", EscapeHtml(battery.Chemistry), s); }
-                    if (battery.DesignedCapacity) { x += addDetailItem("Design Capacity", format("{0} mWh", battery.DesignedCapacity), s); }
+                    if (battery.DesignedCapacity) { x += addDetailItem("Design Capacity", format('{0} mWh', battery.DesignedCapacity), s); }
                     if (battery.ManufactureDate) { x += addDetailItem("Manufacture Date", EscapeHtml(battery.ManufactureDate), s); }
                     if (battery.ManufactureName) { x += addDetailItem("Manufacture Name", EscapeHtml(battery.ManufactureName), s); }
                     if (battery.SerialNumber) { x += addDetailItem("Serial Number", EscapeHtml(battery.SerialNumber), s); }
-                    if (battery.ChargeRate) { x += addDetailItem("Charge Rate", format("{0} mW", battery.ChargeRate), s); }
+                    if (battery.ChargeRate) { x += addDetailItem("Charge Rate", format('{0} mW', battery.ChargeRate), s); }
                     if (battery.Charging != null) { x += addDetailItem("Charging", (battery.Charging ? "Yes" : "No"), s); }
-                    if (battery.DischargeRate) { x += addDetailItem("Discharge Rate", format("{0} mW", battery.DischargeRate), s); }
+                    if (battery.DischargeRate) { x += addDetailItem("Discharge Rate", format('{0} mW', battery.DischargeRate), s); }
                     if (battery.Discharging != null) { x += addDetailItem("Discharging", (battery.Discharging ? "Yes" : "No"), s); }
-                    if (battery.RemainingCapacity) { x += addDetailItem("Remaining Capacity", format("{0} mWh", battery.RemainingCapacity), s); }
-                    if (battery.Voltage) { x += addDetailItem("Voltage", format("{0} V", (battery.Voltage / 1000)), s); }
-                    if (battery.Health) { x += addDetailItem("Health", format("{0} %", battery.Health), s); }
-                    if (battery.BatteryCharge) { x += addDetailItem("Battery Charge", format("{0} %", battery.BatteryCharge), s); }   
+                    if (battery.RemainingCapacity) { x += addDetailItem("Remaining Capacity", format('{0} mWh', battery.RemainingCapacity), s); }
+                    if (battery.Voltage) { x += addDetailItem("Voltage", format('{0} V', (battery.Voltage / 1000)), s); }
+                    if (battery.Health) { x += addDetailItem("Health", format('{0} %', battery.Health), s); }
+                    if (battery.BatteryCharge) { x += addDetailItem("Battery Charge", format('{0} %', battery.BatteryCharge), s); }   
                     x += '</div>';
                 }
                 x += '</table>';
@@ -6777,10 +7233,10 @@
                     for (var i in hardware.windows.memory) {
                         var m = hardware.windows.memory[i];
                         x += '<tr><td><div class=style10 style=border-radius:5px;padding:8px>';
-                        x += '<div style=margin-bottom:3px><b>' + EscapeHtml((m.BankLabel ? m.BankLabel : (m.DeviceLocator ? m.DeviceLocator : 'Unknown'))) + '</b></div>';
-                        if (m.Capacity && m.Speed) { x += addDetailItem("Capacity / Speed", format("{0} Mb, {1} Mhz", (m.Capacity / 1024 / 1024), m.Speed), s); }
-                        else if (m.Capacity) { x += addDetailItem("Capacity", format("{0} Mb", (m.Capacity / 1024 / 1024)), s); }
-                        if (m.PartNumber) { x += addDetailItem("Part Number", EscapeHtml((m.Manufacturer && m.Manufacturer != 'Undefined') ? (m.Manufacturer + ', ') : '') + EscapeHtml(m.PartNumber), s); }
+                        x += '<div style=margin-bottom:3px><b>' + EscapeHtml((m.BankLabel ? m.BankLabel : (m.DeviceLocator ? EscapeHtml(m.DeviceLocator) : 'Unknown'))) + '</b></div>';
+                        if (m.Capacity && m.Speed) { x += addDetailItem("Capacity / Speed", EscapeHtml(format('"{0} Mb, {1} Mhz', (m.Capacity / 1024 / 1024), m.Speed)), s); }
+                        else if (m.Capacity) { x += addDetailItem("Capacity", EscapeHtml(format('{0} Mb', (m.Capacity / 1024 / 1024))), s); }
+                        if (m.PartNumber) { x += addDetailItem("Part Number", EscapeHtml((m.Manufacturer && m.Manufacturer != 'Undefined') ? (EscapeHtml(m.Manufacturer) + ', ') : '') + EscapeHtml(m.PartNumber), s); }
                         x += '</div>';
                     }
                     x += '</table>';
@@ -6801,8 +7257,8 @@
                         if(m.Size && (m.Size == 'No Module Installed')) continue;
                         x += '<tr><td><div class=style10 style=border-radius:5px;padding:8px>';
                         x += '<div style=margin-bottom:3px><b>' + EscapeHtml((m.Locator ? m.Locator : 'Unknown')) + '</b></div>';
-                        if (m.Size && m.Speed) { x += addDetailItem("Capacity / Speed", format("{0}, {1}", m.Size, m.Speed), s); }
-                        else if (m.Size) { x += addDetailItem("Capacity", format("{0}", (m.Size)), s); }
+                        if (m.Size && m.Speed) { x += addDetailItem("Capacity / Speed", EscapeHtml(format("{0}, {1}", m.Size, m.Speed)), s); }
+                        else if (m.Size) { x += addDetailItem("Capacity", EscapeHtml(format("{0}", (m.Size)), s)); }
                         if (m.PartNumber) { x += addDetailItem("Part Number", EscapeHtml((m.Manufacturer && m.Manufacturer != 'Undefined')?(m.Manufacturer + ', '):'') + EscapeHtml(m.PartNumber), s); }
                         x += '</div>';
                     }
@@ -6821,8 +7277,8 @@
                         if(m.Size && (m.Size == 'No Module Installed')) continue;
                         x += '<tr><td><div class=style10 style=border-radius:5px;padding:8px>';
                         x += '<div style=margin-bottom:3px><b>' + EscapeHtml((m.DeviceLocator ? m.DeviceLocator : 'Unknown')) + '</b></div>';
-                        if (m.Size && m.Speed) { x += addDetailItem("Capacity / Speed", format("{0}, {1}", m.Size, m.Speed), s); }
-                        else if (m.Size) { x += addDetailItem("Capacity", format("{0}", (m.Size)), s); }
+                        if (m.Size && m.Speed) { x += addDetailItem("Capacity / Speed", EscapeHtml(format("{0}, {1}", m.Size, m.Speed)), s); }
+                        else if (m.Size) { x += addDetailItem("Capacity", EscapeHtml(format("{0}", (m.Size))), s); }
                         if (m.PartNumber) { x += addDetailItem("Part Number", EscapeHtml((m.Manufacturer && m.Manufacturer != '')?(m.Manufacturer + ', '):'') + EscapeHtml(m.PartNumber), s); }
                         x += '</div>';
                     }
@@ -6835,6 +7291,7 @@
             if (hardware.identifiers && ident.storage_devices) {
                 var x = '';
                 // Sort Storage
+                ident.storage_devices = ident.storage_devices.filter(function (x) { return x != null; });
                 ident.storage_devices.sort(function (a, b) { if (a.Caption > b.Caption) return 1; if (a.Caption < b.Caption) return -1; return 0; });
 
                 x += '<table style=width:100%>';
@@ -6846,7 +7303,7 @@
                         if (m.Model && (m.Model != m.Caption)) { x += addDetailItem("Model", EscapeHtml(m.Model), s); }
                         if (m.Size) {
                             if ((typeof m.Size == 'string') && (parseInt(m.Size) == m.Size)) { m.Size = parseInt(m.Size); }
-                            if (typeof m.Size == 'number') { x += addDetailItem("Capacity", format("{0} Mb", Math.floor(m.Size / 1024 / 1024)), s); }
+                            if (typeof m.Size == 'number') { x += addDetailItem("Capacity", EscapeHtml(format('{0} Mb', Math.floor(m.Size / 1024 / 1024))), s); }
                             if (typeof m.Size == 'string') { x += addDetailItem("Capacity", EscapeHtml(m.Size), s); }
                         }
                         if(hardware.windows && hardware.windows.drives && m.Model){
@@ -6864,10 +7321,13 @@
             // Volumes and Bitlocker
             if (hardware.windows && hardware.windows.volumes) {
                 var x = '';
+                const encMethod = { 0: '', 1: "AES-128 with diffuser", 2: "AES-256 with diffuser", 3: "AES-128", 4: "AES-256", 5: "Hardware encryption", 6: "XTS-AES-128", 7: "XTS-AES-256" };
+                const driveType = { 0: "Unknown", 1: "No Root Directory", 2: "Removable Disk", 3: "Local Disk", 4: "Network Drive", 5: "Compact Disc", 6: "RAM Disk" };
+                const conversionStatus = { 1: "Fully Encrypted", 2: "Encryption In Progress", 3: "Decryption In Progress", 4: "Encryption Paused", 5: "Decryption Paused" };
                 for (var i in hardware.windows.volumes) {
                     var m = hardware.windows.volumes[i];
                     x += '<tr><td><div class=style10 style=border-radius:5px;padding:8px>';
-                    x += '<div style=margin-bottom:3px><b>' + i + ':' + (((m.name == null) || (m.name == '')) ? '' : (' - ' + EscapeHtml(m.name))) + '</b></div>';
+                    x += '<div style=margin-bottom:3px><b>' + EscapeHtml(i) + ':' + (((m.name == null) || (m.name == '')) ? '' : (' - ' + EscapeHtml(m.name))) + '</b></div>';
                     if (m.size) {
                         var sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
                         var j = parseInt(Math.floor(Math.log(Math.abs(m.size)) / Math.log(1024)), 10);
@@ -6882,17 +7342,28 @@
                     }
                     if (m.type) {
                         var type = (m.removable == true ? "Removable" : (m.cdrom == true ? "CD-ROM" : ''));
+                        if (m.dType != null) { type = driveType.hasOwnProperty(m.dType) ? driveType[m.dType] : 'Unknown'; }
                         x += addDetailItem("File System", (type != '' ? (type + ' / ') : '') + (m.type == 'Unknown' ? "Unknown" : EscapeHtml(m.type)), s);
                     }
 
-                    if (m.protectionStatus || m.volumeStatus) {
-                        var bitlockerState = [];
-                        if (m.protectionStatus) bitlockerState.push("Enabled");
-                        if (m.volumeStatus && m.volumeStatus == 'FullyDecrypted') bitlockerState.push("Fully Decrypted");
-                        if (m.volumeStatus && m.volumeStatus == 'EncryptionInProgress') bitlockerState.push("Encryption In Progress");
-                        if (m.volumeStatus && m.volumeStatus == 'FullyEncrypted') bitlockerState.push("Fully Encrypted");
-                        bitlockerState = bitlockerState.join(' - ');
-                        if (m.recoveryPassword) { bitlockerState += addKeyLink('', 'deviceDetailsShowBitlockerInfo(\"' + encodeURIComponentEx(i) + '\",\"' + encodeURIComponentEx(m.identifier) + '\",\"' + encodeURIComponentEx(m.recoveryPassword) + '\")'); }
+                    if (m.protectionStatus || m.volumeStatus) { // volumeStatus=conversionStatus
+                        var bitlockerState;
+                        if (typeof(m.volumeStatus) === 'string') {  // string style db schema
+                            bitlockerState = EscapeHtml(m.volumeStatus);
+                        } else {    // new code db schema
+                            if (m.protectionStatus == 2) {
+                                bitlockerState = 'Locked'
+                            } else {
+                                bitlockerState = (conversionStatus.hasOwnProperty(m.volumeStatus) ? conversionStatus[m.volumeStatus] : "Unknown");
+                            }
+                        }
+                        bitlockerState += (encMethod.hasOwnProperty(m.encryptionMethod) ? ' / ' + encMethod[m.encryptionMethod] : ' / ' + "Unknown");
+                        var lastrp = (m.identifier && hardware.windows.bitlocker) ? hardware.windows.bitlocker[m.identifier] : null;
+                        var legacyrp = (m.lastKnownRecoveryPassword && (m.lastKnownIdentifier === m.identifier)) ? m.lastKnownRecoveryPassword : null;   // pre key-list (un-migrated) docs
+                        var sendPW = m.recoveryPassword || (lastrp ? lastrp.rp : null) || legacyrp || "External (PIN/Key/File)";
+                        if (m.identifier) {
+                            bitlockerState += addKeyLink('', 'deviceDetailsShowBitlockerInfo(\"' + encodeURIComponentEx(i) + '\",\"' + encodeURIComponentEx(m.identifier) + '\",\"' + encodeURIComponentEx(sendPW) + '\"' + ')');
+                        }
                         x += addDetailItem("BitLocker", bitlockerState, s);
                     }
                     x += '</div>';
@@ -6905,9 +7376,10 @@
                 var x = '';
                 for (var i in hardware.linux.volumes) {
                     var m = hardware.linux.volumes[i];
+                    if (m == null) continue;
                     if(m.mount_point.startsWith('/var/lib/docker/overlay2')) continue;
                     x += '<tr><td><div class=style10 style=border-radius:5px;padding:8px>';
-                    x += '<div style=margin-bottom:3px><b>' + m.mount_point + '</b></div>';
+                    x += '<div style=margin-bottom:3px><b>' + EscapeHtml(m.mount_point) + '</b></div>';
                     if (m.size) {
                         var sizes = ['KB', 'MB', 'GB', 'TB'];
                         var j = parseInt(Math.floor(Math.log(Math.abs(m.size)) / Math.log(1024)), 10);
@@ -6940,7 +7412,7 @@
                     var m = hardware.darwin.volumes[i];
                     if(m.mount_point.startsWith('/var/lib/docker/overlay2')) continue;
                     x += '<tr><td><div class=style10 style=border-radius:5px;padding:8px>';
-                    x += '<div style=margin-bottom:3px><b>' + m.mount_point + '</b></div>';
+                    x += '<div style=margin-bottom:3px><b>' + EscapeHtml(m.mount_point) + '</b></div>';
                     if (m.size) {
                         x += addDetailItem("Capacity", EscapeHtml(m.size), s);
                     }
@@ -6978,9 +7450,12 @@
 
         function deviceDetailsShowBitlockerInfo(drive, identifier, password) {
             if (xxdialogMode) return false;
-            var x = '<div><p>' + "Identifier" + '</p><p style=user-select:text;font-weight:bold>' + (identifier ? decodeURIComponent(identifier) : "Unknown") + '</p>';
-            x += '<p>' + "Recovery Password" + '</p><p style=user-select:text;font-weight:bold>' + (password ? decodeURIComponent(password) : "Unknown") + '</p></div>';
-            setDialogMode(2, decodeURIComponent(drive) + ': ' + "BitLocker Information", 1, null, x, '');
+            var decodedDrive = drive ? decodeURIComponent(drive) : "Unknown";
+            var decodedIdentifier = identifier ? decodeURIComponent(identifier) : "Unknown";
+            var decodedPassword = password ? decodeURIComponent(password) : "Unknown";
+            var x = '<div><p>' + "Identifier" + '</p><p style=user-select:text;font-weight:bold>' + EscapeHtml(decodedIdentifier) + '</p>';
+            x += '<p>' + "Recovery Password" + '</p><p style=user-select:text;font-weight:bold>' + EscapeHtml(decodedPassword) + '</p></div>';
+            setDialogMode(2, EscapeHtml(decodedDrive) + ': ' + "BitLocker Information", 1, null, x, '');
         }
 
 
@@ -7134,7 +7609,7 @@
 
         // Save console text to file
         function p15downloadConsoleText() {
-            saveAs(new Blob([Q('p15agentConsoleText').innerText], { type: 'application/octet-stream' }), "console.txt");
+            saveAs(new Blob([Q('p15agentConsoleText').innerText], { type: 'application/octet-stream' }), 'console.txt');
         }
 
         // Called then user presses the "Change Core" button
@@ -7242,8 +7717,8 @@
 
             // Display IP-KVM information if needed
             if (currentMesh.mtype == 4) {
-                x += addHtmlValue("Hostname", currentMesh.kvm.host);
-                x += addHtmlValue("Username", currentMesh.kvm.user);
+                x += addHtmlValue("Hostname", EscapeHtml(currentMesh.kvm.host));
+                x += addHtmlValue("Username", EscapeHtml(currentMesh.kvm.user));
             }
 
             x += '<br><input type=button value="' + "Notes" + '" onclick=showNotes(false,"' + encodeURIComponent(currentMesh._id) + '") />';
@@ -7398,6 +7873,7 @@
             x += '<label><input type=checkbox onchange=p20validateAddMeshUserDialog() id=p20remotelimitedinput style=margin-left:12px>' + "Limited Input Only" + '</label><br>';
             x += '<label><input type=checkbox onchange=p20validateAddMeshUserDialog() id=p20noterminal style=margin-left:12px>' + "No Terminal Access" + '</label><br>';
             x += '<label><input type=checkbox onchange=p20validateAddMeshUserDialog() id=p20nofiles style=margin-left:12px>' + "No File Access" + '</label><br>';
+            x += '<label><input type=checkbox onchange=p20validateAddMeshUserDialog() id=p20noregistry style=margin-left:12px>' + "No Registry Access" + '</label><br>';
             x += '<label><input type=checkbox onchange=p20validateAddMeshUserDialog() id=p20noamt style=margin-left:12px>' + "No Intel&reg; AMT" + '</label><br>';
             x += '<label><input type=checkbox onchange=p20validateAddMeshUserDialog() id=p20meshagentconsole>' + "Mesh Agent Console" + '</label><br>';
             x += '<label><input type=checkbox onchange=p20validateAddMeshUserDialog() id=p20meshserverfiles>' + "Server Files" + '</label><br>';
@@ -7431,6 +7907,7 @@
             QE('p20remotelimitedinput', nc && Q('p20remotecontrol').checked && !Q('p20remoteview').checked);
             QE('p20noterminal', nc && Q('p20remotecontrol').checked);
             QE('p20nofiles', nc && Q('p20remotecontrol').checked);
+            QE('p20noregistry', nc && Q('p20remotecontrol').checked);
             QE('p20noamt', nc && Q('p20remotecontrol').checked);
             QE('p20chatnotify', nc);
             QE('p20uninstall', nc);
@@ -7452,6 +7929,7 @@
                 if (Q('p20remoteview').checked == true) meshadmin += 256;
                 if (Q('p20noterminal').checked == true) meshadmin += 512;
                 if (Q('p20nofiles').checked == true) meshadmin += 1024;
+                if (Q('p20noregistry').checked == true) meshadmin += 4194304;
                 if (Q('p20noamt').checked == true) meshadmin += 2048;
                 if (Q('p20remotelimitedinput').checked == true) meshadmin += 4096;
                 if (Q('p20limitevents').checked == true) meshadmin += 8192;
@@ -7481,6 +7959,7 @@
                 if ((meshrights & 256) != 0) r.push("Remote View Only");
                 if ((meshrights & 512) != 0) r.push("No Terminal");
                 if ((meshrights & 1024) != 0) r.push("No Files");
+                if ((meshrights & 4194304) != 0) r.push("No Registry");
                 if ((meshrights & 2048) != 0) r.push("No Intel&reg; AMT");
                 if (((meshrights & 8) != 0) && ((meshrights & 4096) != 0) && ((meshrights & 256) == 0)) r.push("Limited Input");
                 if ((meshrights & 8192) != 0) r.push("Self Events Only");
@@ -7663,7 +8142,7 @@
 
             // Show notification within the web page.
             if (n.time == null) { n.time = Date.now(); }
-            if (n.id == null) { n.id = Math.random(); }
+            if ((typeof n.id != 'number') || (isFinite(n.id) == false)) { n.id = Math.random(); }
             notifications.unshift(n);
             setNotificationCount(notifications.length);
             clickNotificationIcon(true);
@@ -7793,6 +8272,7 @@
             if ((userinfo.removeRights & 0x00000100) != 0) { add += 0x00000100; } // Desktop View Only
             if ((userinfo.removeRights & 0x00000200) != 0) { add += 0x00000200; } // No Terminal
             if ((userinfo.removeRights & 0x00000400) != 0) { add += 0x00000400; } // No Files
+            if ((userinfo.removeRights & 0x00400000) != 0) { add += 0x00400000; } // No Registry
             if ((userinfo.removeRights & 0x00000010) != 0) { substract += 0x00000010; } // No Console
             if ((userinfo.removeRights & 0x00008000) != 0) { substract += 0x00008000; } // No Uninstall
             if ((userinfo.removeRights & 0x00020000) != 0) { substract += 0x00020000; } // No Remote Command
@@ -7949,24 +8429,24 @@
         function getFileSizeStr(size) { if (typeof size != 'number') { size = 0; } if (size == 1) return "1 byte"; return format('{0} bytes', size); }
         function focusTextBox(x) { setTimeout(function () { Q(x).selectionStart = Q(x).selectionEnd = 65535; Q(x).focus(); }, 0); }
         var isFilenameValid = (function () { var x1 = /^[^\\/:\*\?"<>\|]+$/, x2 = /^\./, x3 = /^(nul|prn|con|lpt[0-9]|com[0-9])(\.|$)/i; return function isFilenameValid(fname) { return x1.test(fname) && !x2.test(fname) && !x3.test(fname) && (fname[0] != '.'); } })();
-        function printDate(d) { return d.toLocaleDateString(args.locale); }
-        function printTime(d) { return d.toLocaleTimeString(args.locale); }
-        function printDateTime(d) { return d.toLocaleString(args.locale); }
-        function printTimer(d) { return zeroPad(Math.floor(d / 3600), 2) + ':' + zeroPad((Math.floor(d / 60) % 60), 2) + ':' + zeroPad((d % 60), 2); }
-        function format(format) { var args = Array.prototype.slice.call(arguments, 1); return format.replace(/{(\d+)}/g, function (match, number) { return typeof args[number] != 'undefined' ? args[number] : match; }); };
+        function printDate(d) { return EscapeHtml(d.toLocaleDateString(args.locale)); }
+        function printTime(d) { return EscapeHtml(d.toLocaleTimeString(args.locale)); }
+        function printDateTime(d) { return EscapeHtml(d.toLocaleString(args.locale)); }
+        function printTimer(d) { return EscapeHtml(zeroPad(Math.floor(d / 3600), 2) + ':' + zeroPad((Math.floor(d / 60) % 60), 2) + ':' + zeroPad((d % 60), 2)); }
+        function format(format) { var args = Array.prototype.slice.call(arguments, 1); return EscapeHtml(format.replace(/{(\d+)}/g, function (match, number) { return typeof args[number] != 'undefined' ? args[number] : match; })); };
         function nobreak(x) { return x.split(' ').join('&nbsp;'); }
         function getUserName(userid) { 
             var useridsplit = userid.split('/'), userid2 = useridsplit[0] + '/' + useridsplit[1] + '/' + useridsplit[2], guestname = '';
-            if ((useridsplit.length == 4) && (useridsplit[3].startsWith('guest:'))) { guestname = ' - ' + decode_utf8(atob(useridsplit[3].substring(6))); }
+            if ((useridsplit.length == 4) && (useridsplit[3].startsWith('guest:'))) { guestname = ' - ' + EscapeHtml(decode_utf8(atob(useridsplit[3].substring(6)))); }
             if (users && users[userid2] != null) { if (users[userid2].realname != null) return (users[userid2].realname + guestname); else return (users[userid2].name + guestname); }
             if (currentNode && currentNode.links && currentNode.links[userid] && currentNode.links[userid].name != null) { return (currentNode.links[userid].name + guestname); }
             if (userid == userinfo._id) { return (userinfo.name + guestname); }
             if (nodes) { for (var a in nodes) { if (nodes[a].links) { for (var b in nodes[a].links) { if (nodes[a].links[b].name && b == userid) return (nodes[a].links[b].name + guestname); } } } }
             if (meshes) { for (var a in meshes) { if (meshes[a].links) { for (var b in meshes[a].links) { if (meshes[a].links[b].name && b == userid) return (meshes[a].links[b].name + guestname); } } } }
-            return (useridsplit[2] + guestname);
+            return (EscapeHtml(useridsplit[2]) + guestname);
         }
-        function addDetailItem(title, value, state) { return '<table style=width:100%><td>' + nobreak(title) + '<td style=text-align:right>' + value + '</table>'; }
-        function isPrivateIP(a) { return (a.startsWith('10.') || a.startsWith('172.16.') || a.startsWith('192.168.')); }
+        function addDetailItem(title, value, state) { return '<table style=width:100%><td>' + nobreak(title) + '<td style=text-align:right' + (state === true ? ';word-break:break-all' : '') + '>' + value + '</table>'; }
+        function isPrivateIP(a) { if (a.indexOf(':') != a.lastIndexOf(':')) { return /^(::1?$|f[cd]|fe[89ab])/i.test(a); } return /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.)/.test(a); }
         function encodeURIComponentEx(txt) { return encodeURIComponent(txt).replace(/'/g, '%27'); };
         function safeNewWindow(url, target) { var newWindow = window.open(url, target, 'noopener,noreferrer'); if (newWindow) { newWindow.opener = null; } }
         function isWindowsNode(node) { if ((node.mtype != 2) || (node.agent == null) || (node.agent.id == null)) return false; return ([1,2,3,4,21,22,34,42,43].indexOf(node.agent.id) >= 0); }
